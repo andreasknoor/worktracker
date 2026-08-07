@@ -157,6 +157,42 @@ to stay out of the Dock). Run via `open dist/WorkTrackerTracker.app`, not
 registered under `com.worktracker.tracker` / "WorkTracker" instead of
 anonymously.
 
+## Settings dialog: NSAlert accessory view breaks paste and key repeat
+
+Not caught by anything automated — this is real AppKit interaction
+behavior, only found by actually using the settings window. The original
+settings UI was an `NSAlert` with a custom accessory view containing
+editable `NSScrollView`/`NSTextView` fields. Two real bugs traced back to
+that choice: Cmd+V silently did nothing (AppKit dispatches Cmd+V by
+matching it against a menu item's key equivalent in the app's main menu,
+which this app never set — `NSApp.mainMenu` was never assigned, so there
+was no Edit menu for the shortcut to match, and the first responder's own
+`paste:` was never reached), and holding a character key didn't
+auto-repeat like a normal text field (a known rough edge of NSAlert's modal
+accessory views hosting complex interactive controls, not something
+tunable via the text view's own configuration). Fixed by adding a minimal
+main menu with a standard Edit submenu (`AppDelegate.buildMainMenu()`) and
+replacing the alert with a real `NSWindow` (`SettingsWindowController`).
+Separately: the wrapping `NSScrollView` fields initially rendered as
+invisible/zero-size inside the `NSStackView`, because `NSScrollView` (unlike
+`NSTextField`) has no meaningful intrinsic content size — `NSStackView`'s
+Auto Layout collapses views without one unless given explicit width/height
+`NSLayoutConstraint`s.
+
+## `vercel dev` doesn't work for local development
+
+`vercel dev` doesn't reliably route requests in this project's zero-config
+(no meta-framework) layout — even the bare `/api` path 404s locally despite
+the identical code routing correctly once actually deployed, and
+`.vercel/output` isn't created despite the CLI logging "Build completed".
+Rather than fight `vercel dev`'s emulation, local development runs a plain
+Node HTTP server directly (`src/server/devServer.ts`, via
+`@hono/node-server`, started with `npm run dev`) that reuses the exact same
+`createApp()` and Postgres repositories as the real deployment — just
+without Vercel's dev-mode routing layer in between. `.env.local` (via
+`vercel env pull`) points it at the same Neon database as production/preview,
+so local testing exercises real data, not a separate sandboxed DB.
+
 ## Not yet implemented
 
 - Windows tracker (`windows-tracker/` is a placeholder directory). Only the

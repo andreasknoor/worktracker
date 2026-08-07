@@ -38,14 +38,27 @@ npm run typecheck
 ```
 
 Copy `.env.example` to `.env.local` and fill in `DATABASE_URL`, `APP_TIME_ZONE`,
-`DASHBOARD_PASSWORD`, and `DASHBOARD_SESSION_SECRET` for local development.
+`DASHBOARD_PASSWORD`, and `DASHBOARD_SESSION_SECRET` for local development — or,
+if the project is already linked to Vercel (`vercel link`), just run
+`vercel env pull .env.local` to grab the real values (including the live
+Neon `DATABASE_URL`) instead of typing them by hand.
 
 ```sh
 npm run db:apply-schema   # applies src/server/db/schema.sql to DATABASE_URL
+npm run dev               # local server + dashboard at http://localhost:3000, using .env.local
 ```
 
+`npm run dev` runs `src/server/devServer.ts` (a plain Node HTTP server via
+`@hono/node-server`), not `vercel dev` — `vercel dev` doesn't reliably route
+requests in this project's zero-config (no meta-framework) layout, see
+`docs/IMPLEMENTATION_NOTES.md`. Pointing `.env.local`'s `DATABASE_URL` at the
+same Neon database as production means local testing writes real rows there
+— fine for a solo personal project, but worth knowing before generating a
+lot of local test activity.
+
 Deployment is via the Vercel CLI/dashboard (`vercel.json` routes all `/api/*`
-traffic to the single catch-all Function).
+traffic to the single catch-all Function `api/index.ts` — unrelated to and
+unaffected by `devServer.ts`).
 
 ## Documentation
 
