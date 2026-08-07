@@ -88,7 +88,18 @@ header.app-header .subtitle {
   color: var(--text-secondary);
   margin-top: 2px;
 }
-.header-actions { display: flex; gap: 8px; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
+.device-filter-select {
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  cursor: pointer;
+}
 .icon-btn {
   width: 36px; height: 36px;
   display: flex; align-items: center; justify-content: center;

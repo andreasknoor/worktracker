@@ -41,6 +41,24 @@ function minutesToHHmm(minutes: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
+/**
+ * Reads the optional `?deviceId=` filter used to scope a stats endpoint to
+ * one device instead of the combined all-devices view. Validates the id
+ * against the devices repository (not just uuid syntax) so a stale id — e.g.
+ * a device the user just revoked/removed, still cached in the dashboard's
+ * localStorage — surfaces as a clear 404 the frontend can react to, rather
+ * than silently returning an empty "all zeros" result.
+ */
+async function resolveDeviceIdFilter(c: Context, devicesRepo: DevicesRepository): Promise<string | undefined | Response> {
+  const deviceId = c.req.query("deviceId");
+  if (!deviceId) return undefined;
+
+  const device = await devicesRepo.getById(deviceId);
+  if (!device) return c.json({ error: "Unknown deviceId" }, 404);
+
+  return deviceId;
+}
+
 export function createApp(deps: AppDependencies): Hono {
   const app = new Hono();
   const timeZone = appTimeZone();
@@ -83,6 +101,9 @@ export function createApp(deps: AppDependencies): Hono {
   // ---------- Stats ----------
 
   app.get("/api/stats/week", async (c) => {
+    const deviceId = await resolveDeviceIdFilter(c, deps.devices);
+    if (deviceId instanceof Response) return deviceId;
+
     const start = c.req.query("start")!;
     const endExclusive = addDays(start, 7);
 
@@ -91,6 +112,7 @@ export function createApp(deps: AppDependencies): Hono {
       deps.events,
       Date.parse(start + "T00:00:00Z"),
       Date.parse(endExclusive + "T00:00:00Z"),
+      deviceId,
     );
     const daily = dailyHours(sessions, start, endExclusive, timeZone);
 
@@ -102,6 +124,9 @@ export function createApp(deps: AppDependencies): Hono {
   });
 
   app.get("/api/stats/week-timeline", async (c) => {
+    const deviceId = await resolveDeviceIdFilter(c, deps.devices);
+    if (deviceId instanceof Response) return deviceId;
+
     const start = c.req.query("start")!;
     const endExclusive = addDays(start, 7);
 
@@ -110,6 +135,7 @@ export function createApp(deps: AppDependencies): Hono {
       deps.events,
       Date.parse(start + "T00:00:00Z"),
       Date.parse(endExclusive + "T00:00:00Z"),
+      deviceId,
     );
     const segments = dailySegments(sessions, start, endExclusive, timeZone);
 
@@ -121,6 +147,9 @@ export function createApp(deps: AppDependencies): Hono {
   });
 
   app.get("/api/stats/month", async (c) => {
+    const deviceId = await resolveDeviceIdFilter(c, deps.devices);
+    if (deviceId instanceof Response) return deviceId;
+
     const monthAnyDate = c.req.query("month")!;
     const start = monthStart(monthAnyDate);
     const endExclusive = monthEndExclusive(monthAnyDate);
@@ -130,6 +159,7 @@ export function createApp(deps: AppDependencies): Hono {
       deps.events,
       Date.parse(start + "T00:00:00Z"),
       Date.parse(endExclusive + "T00:00:00Z"),
+      deviceId,
     );
     const daily = dailyHours(sessions, start, endExclusive, timeZone);
 
@@ -141,6 +171,9 @@ export function createApp(deps: AppDependencies): Hono {
   });
 
   app.get("/api/stats/summary", async (c) => {
+    const deviceId = await resolveDeviceIdFilter(c, deps.devices);
+    if (deviceId instanceof Response) return deviceId;
+
     const days = Number(c.req.query("days") ?? "7");
     const endParam = c.req.query("end");
     const endExclusive = endParam ?? isoDateKey(addOneDay(new Date()));
@@ -151,6 +184,7 @@ export function createApp(deps: AppDependencies): Hono {
       deps.events,
       Date.parse(start + "T00:00:00Z"),
       Date.parse(endExclusive + "T00:00:00Z"),
+      deviceId,
     );
     const daily = dailyHours(sessions, start, endExclusive, timeZone);
     const periodSummary = summary(sessions, daily);
@@ -166,6 +200,9 @@ export function createApp(deps: AppDependencies): Hono {
   });
 
   app.get("/api/stats/sessions", async (c) => {
+    const deviceId = await resolveDeviceIdFilter(c, deps.devices);
+    if (deviceId instanceof Response) return deviceId;
+
     const days = Number(c.req.query("days") ?? "7");
     const endExclusive = isoDateKey(addOneDay(new Date()));
     const start = addDays(endExclusive, -days);
@@ -175,6 +212,7 @@ export function createApp(deps: AppDependencies): Hono {
       deps.events,
       Date.parse(start + "T00:00:00Z"),
       Date.parse(endExclusive + "T00:00:00Z"),
+      deviceId,
     );
 
     // Each session is split into per-day clock-time chunks (reusing the same
@@ -196,16 +234,20 @@ export function createApp(deps: AppDependencies): Hono {
   });
 
   app.get("/api/stats/live", async (c) => {
+    const deviceId = await resolveDeviceIdFilter(c, deps.devices);
+    if (deviceId instanceof Response) return deviceId;
+
     const now = Date.now();
     const todayKey = isoDateKey(new Date(now));
     // Buffer well past any device's idle threshold so the session that's
     // potentially still running is fully captured.
     const bufferedStart = Date.parse(addDays(todayKey, -1) + "T00:00:00Z");
 
-    const sessions = await getMergedSessionsInRange(deps.devices, deps.events, bufferedStart, now + 1);
+    const sessions = await getMergedSessionsInRange(deps.devices, deps.events, bufferedStart, now + 1, deviceId);
 
-    const devices = await deps.devices.list();
-    const maxIdleThresholdMs = Math.max(30 * 60_000, ...devices.map((d) => d.idleThresholdMinutes * 60_000));
+    const allDevices = await deps.devices.list();
+    const relevantDevices = deviceId ? allDevices.filter((d) => d.id === deviceId) : allDevices;
+    const maxIdleThresholdMs = Math.max(30 * 60_000, ...relevantDevices.map((d) => d.idleThresholdMinutes * 60_000));
 
     const live = liveView(sessions, now, maxIdleThresholdMs, timeZone);
 
@@ -217,7 +259,10 @@ export function createApp(deps: AppDependencies): Hono {
   });
 
   app.get("/api/stats/first-activity", async (c) => {
-    const firstMs = await deps.events.getFirstEventTimestamp();
+    const deviceId = await resolveDeviceIdFilter(c, deps.devices);
+    if (deviceId instanceof Response) return deviceId;
+
+    const firstMs = await deps.events.getFirstEventTimestamp(deviceId);
     return c.json({ date: firstMs === null ? null : isoDateKey(new Date(firstMs)) });
   });
 

@@ -116,9 +116,12 @@ export class PostgresActivityEventsRepository implements ActivityEventsRepositor
     return result.rows.map((r) => r.timestamp_utc.getTime());
   }
 
-  async getFirstEventTimestamp(): Promise<number | null> {
+  async getFirstEventTimestamp(deviceId?: string): Promise<number | null> {
     const result = await this.pool.query<{ timestamp_utc: Date | null }>(
-      `SELECT MIN(timestamp_utc) AS timestamp_utc FROM activity_events`,
+      deviceId
+        ? `SELECT MIN(timestamp_utc) AS timestamp_utc FROM activity_events WHERE device_id = $1`
+        : `SELECT MIN(timestamp_utc) AS timestamp_utc FROM activity_events`,
+      deviceId ? [deviceId] : [],
     );
     const value = result.rows[0]?.timestamp_utc;
     return value ? value.getTime() : null;

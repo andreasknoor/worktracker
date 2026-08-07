@@ -86,9 +86,10 @@ export class InMemoryActivityEventsRepository implements ActivityEventsRepositor
       .sort((a, b) => a - b);
   }
 
-  async getFirstEventTimestamp(): Promise<number | null> {
-    if (this.events.length === 0) return null;
-    return Math.min(...this.events.map((e) => e.timestampMs));
+  async getFirstEventTimestamp(deviceId?: string): Promise<number | null> {
+    const scoped = deviceId ? this.events.filter((e) => e.deviceId === deviceId) : this.events;
+    if (scoped.length === 0) return null;
+    return Math.min(...scoped.map((e) => e.timestampMs));
   }
 }
 

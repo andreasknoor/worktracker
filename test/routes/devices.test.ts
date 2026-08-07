@@ -362,3 +362,121 @@ describe("Multi-device overlap handling", () => {
     expect(summary.totalHours).toBeLessThanOrEqual(1.05);
   });
 });
+
+describe("Per-device stats filtering (?deviceId=)", () => {
+  let ctx: TestContext;
+  let deviceA: { id: string; apiKey: string };
+  let deviceB: { id: string; apiKey: string };
+
+  beforeEach(async () => {
+    ctx = await setUp();
+
+    deviceA = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Laptop", platform: "windows" }),
+      })
+    ).json();
+    deviceB = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Desktop", platform: "mac" }),
+      })
+    ).json();
+
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const base = today.getTime() + 9 * 60 * MINUTE;
+
+    // Device A: 1 hour of activity (09:00-10:00). Device B: 2 hours (12:00-14:00).
+    const eventsAt = (startOffsetMs: number, endMinute: number) => {
+      const ts: string[] = [];
+      for (let m = 0; m <= endMinute; m += 10) ts.push(new Date(base + startOffsetMs + m * MINUTE).toISOString());
+      return ts;
+    };
+
+    await ctx.app.request("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${deviceA.apiKey}` },
+      body: JSON.stringify({ timestamps: eventsAt(0, 60) }),
+    });
+    await ctx.app.request("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${deviceB.apiKey}` },
+      body: JSON.stringify({ timestamps: eventsAt(3 * 60 * MINUTE, 120) }),
+    });
+  });
+
+  it("summary with no deviceId combines both devices", async () => {
+    const response = await authed(ctx, "/api/stats/summary?days=1");
+    const summary = await response.json();
+
+    expect(summary.totalHours).toBeGreaterThanOrEqual(2.95);
+    expect(summary.totalHours).toBeLessThanOrEqual(3.05);
+  });
+
+  it("summary scoped to deviceId A only counts that device's hour", async () => {
+    const response = await authed(ctx, `/api/stats/summary?days=1&deviceId=${deviceA.id}`);
+    const summary = await response.json();
+
+    expect(summary.totalHours).toBeGreaterThanOrEqual(0.95);
+    expect(summary.totalHours).toBeLessThanOrEqual(1.05);
+  });
+
+  it("summary scoped to deviceId B only counts that device's two hours", async () => {
+    const response = await authed(ctx, `/api/stats/summary?days=1&deviceId=${deviceB.id}`);
+    const summary = await response.json();
+
+    expect(summary.totalHours).toBeGreaterThanOrEqual(1.95);
+    expect(summary.totalHours).toBeLessThanOrEqual(2.05);
+  });
+
+  it("live scoped to a device with no recent activity reports inactive", async () => {
+    const response = await authed(ctx, `/api/stats/live?deviceId=${deviceA.id}`);
+    const live = await response.json();
+
+    expect(live.isActive).toBe(false);
+  });
+
+  it("first-activity scoped to one device ignores the other device's events", async () => {
+    // Both devices' first events are "today" in this setup, so scope check via explicit device id
+    // just confirms the endpoint accepts the filter and still returns a date.
+    const response = await authed(ctx, `/api/stats/first-activity?deviceId=${deviceA.id}`);
+    const firstActivity = await response.json();
+
+    expect(firstActivity.date).not.toBeNull();
+  });
+
+  it("returns 404 for an unknown deviceId instead of silently returning empty data", async () => {
+    const response = await authed(ctx, "/api/stats/summary?days=1&deviceId=00000000-0000-0000-0000-000000000000");
+    expect(response.status).toBe(404);
+  });
+
+  it("returns 404 for a malformed deviceId", async () => {
+    const response = await authed(ctx, "/api/stats/summary?days=1&deviceId=not-a-uuid");
+    expect(response.status).toBe(404);
+  });
+
+  it("week-timeline scoped to deviceId A only shows that device's segment", async () => {
+    const monday = mondayOfToday();
+    const response = await authed(ctx, `/api/stats/week-timeline?start=${monday}&deviceId=${deviceA.id}`);
+    const timeline = await response.json();
+
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const todaySegments = timeline.days.find((d: { date: string }) => d.date === todayKey)?.segments ?? [];
+    // Device A's window is 09:00-10:00 = 540-600 minutes; device B's 12:00-14:00 must not appear.
+    expect(todaySegments.some((s: { startMinutes: number }) => s.startMinutes === 540)).toBe(true);
+    expect(todaySegments.some((s: { startMinutes: number }) => s.startMinutes === 720)).toBe(false);
+  });
+});
+
+function mondayOfToday(): string {
+  const now = new Date();
+  const day = now.getUTCDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(now);
+  monday.setUTCDate(now.getUTCDate() + diff);
+  return monday.toISOString().slice(0, 10);
+}

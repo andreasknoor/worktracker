@@ -42,8 +42,8 @@ export interface ActivityEventsRepository {
   insertEvents(deviceId: string, timestampsMs: readonly number[]): Promise<void>;
   /** Events with `timestampMs` in `[startMs, endExclusiveMs)`, for one device. */
   getEventsInRangeForDevice(deviceId: string, startMs: number, endExclusiveMs: number): Promise<number[]>;
-  /** The earliest recorded event across all devices, or null if none exist. */
-  getFirstEventTimestamp(): Promise<number | null>;
+  /** The earliest recorded event, optionally scoped to one device, or null if none exist. */
+  getFirstEventTimestamp(deviceId?: string): Promise<number | null>;
 }
 
 export interface GlobalSettings {

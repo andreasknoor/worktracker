@@ -52,6 +52,8 @@
 
   /* ---------- State ---------- */
 
+  const DEVICE_STORAGE_KEY = "wtk_selected_device";
+
   const state = {
     rangeDays: 7,        // used for stat tiles / trend / sessions; "all" resolves to a day count once first-activity is known
     rangeIsAllTime: false,
@@ -62,7 +64,22 @@
     monthOffset: 0,       // 0 = current calendar month, -1 = previous month, etc.
     coreHoursStartMinutes: 9 * 60,  // refreshed from settings; used by the timeline chart
     coreHoursEndMinutes: 18 * 60,
+    selectedDeviceId: localStorage.getItem(DEVICE_STORAGE_KEY) || "", // "" = all devices combined
   };
+
+  function setSelectedDeviceId(deviceId) {
+    state.selectedDeviceId = deviceId || "";
+    if (deviceId) {
+      localStorage.setItem(DEVICE_STORAGE_KEY, deviceId);
+    } else {
+      localStorage.removeItem(DEVICE_STORAGE_KEY);
+    }
+  }
+
+  function withDeviceParam(params) {
+    if (state.selectedDeviceId) params.set("deviceId", state.selectedDeviceId);
+    return params;
+  }
 
   /* ---------- Formatting ---------- */
 
@@ -117,32 +134,34 @@
   /* ---------- Data fetching ---------- */
 
   async function fetchSummary(rangeDays, endDate) {
-    const params = new URLSearchParams({ days: String(rangeDays) });
+    const params = withDeviceParam(new URLSearchParams({ days: String(rangeDays) }));
     if (endDate) params.set("end", isoDate(endDate));
     return fetchJson("/api/stats/summary?" + params.toString());
   }
 
   async function fetchWeek(mondayDate) {
-    const params = new URLSearchParams({ start: isoDate(mondayDate) });
+    const params = withDeviceParam(new URLSearchParams({ start: isoDate(mondayDate) }));
     return fetchJson("/api/stats/week?" + params.toString());
   }
 
   async function fetchWeekTimeline(mondayDate) {
-    const params = new URLSearchParams({ start: isoDate(mondayDate) });
+    const params = withDeviceParam(new URLSearchParams({ start: isoDate(mondayDate) }));
     return fetchJson("/api/stats/week-timeline?" + params.toString());
   }
 
   async function fetchMonth(anyDateInMonth) {
-    const params = new URLSearchParams({ month: isoDate(anyDateInMonth) });
+    const params = withDeviceParam(new URLSearchParams({ month: isoDate(anyDateInMonth) }));
     return fetchJson("/api/stats/month?" + params.toString());
   }
 
   async function fetchFirstActivity() {
-    return fetchJson("/api/stats/first-activity");
+    const params = withDeviceParam(new URLSearchParams());
+    const query = params.toString();
+    return fetchJson("/api/stats/first-activity" + (query ? "?" + query : ""));
   }
 
   async function fetchSessions(rangeDays) {
-    const params = new URLSearchParams({ days: String(rangeDays) });
+    const params = withDeviceParam(new URLSearchParams({ days: String(rangeDays) }));
     return fetchJson("/api/stats/sessions?" + params.toString());
   }
 
@@ -899,7 +918,10 @@
     devicesOverlay.classList.add("open");
   });
 
-  document.getElementById("devicesClose").addEventListener("click", () => devicesOverlay.classList.remove("open"));
+  document.getElementById("devicesClose").addEventListener("click", () => {
+    devicesOverlay.classList.remove("open");
+    refreshDeviceFilterDropdown().catch(err => console.error(err)); // pick up any add/revoke made while the panel was open
+  });
   devicesOverlay.addEventListener("click", e => { if (e.target === devicesOverlay) devicesOverlay.classList.remove("open"); });
 
   document.getElementById("addDeviceBtn").addEventListener("click", async () => {
@@ -920,10 +942,58 @@
     }
   });
 
+  /* ---------- Wiring: device filter dropdown (header) ---------- */
+
+  const deviceFilterSelect = document.getElementById("deviceFilter");
+
+  async function refreshDeviceFilterDropdown() {
+    let devices;
+    try {
+      devices = await fetchDevices();
+    } catch (err) {
+      console.error(err);
+      return;
+    }
+
+    const stillExists = devices.some(d => d.id === state.selectedDeviceId);
+    if (state.selectedDeviceId && !stillExists) {
+      // The previously selected device was removed/revoked since we last saw
+      // it (e.g. from another session) — fall back to the combined view
+      // rather than keep filtering by a device that's no longer listed.
+      setSelectedDeviceId("");
+    }
+
+    deviceFilterSelect.innerHTML = "";
+    const allOption = document.createElement("option");
+    allOption.value = "";
+    allOption.textContent = "All devices";
+    deviceFilterSelect.appendChild(allOption);
+
+    devices.forEach(d => {
+      const option = document.createElement("option");
+      option.value = d.id;
+      option.textContent = d.name + (d.revoked ? " (revoked)" : "");
+      deviceFilterSelect.appendChild(option);
+    });
+
+    deviceFilterSelect.value = state.selectedDeviceId;
+  }
+
+  deviceFilterSelect.addEventListener("change", () => {
+    setSelectedDeviceId(deviceFilterSelect.value);
+    syncLive();
+    renderAll().catch(err => {
+      console.error(err);
+      showToast("Could not load dashboard data", true);
+    });
+  });
+
   /* ---------- Live timer (today worked + current session) ---------- */
 
   async function fetchLive() {
-    return fetchJson("/api/stats/live");
+    const params = withDeviceParam(new URLSearchParams());
+    const query = params.toString();
+    return fetchJson("/api/stats/live" + (query ? "?" + query : ""));
   }
 
   function formatClock(totalSeconds) {
@@ -1044,6 +1114,7 @@
 
   ensureAuthenticated()
     .catch(err => console.error(err)) // fail open on network errors; renderAll() surfaces its own error state
+    .then(() => refreshDeviceFilterDropdown().catch(err => console.error(err))) // clears a stale stored deviceId first, so later fetches don't 404 on it
     .then(() => {
       syncLive();
       setInterval(tickLive, 1000);
