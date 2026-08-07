@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // menu-bar only, no Dock icon
+        NSApp.mainMenu = Self.buildMainMenu()
 
         config = ConfigStore.load(from: configFileURL)
         activityQueue = ActivityQueue(storageURL: queueFileURL)
@@ -61,6 +62,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         flushTimer = timer
 
         statusBarController.update(isActive: false, pendingCount: activityQueue.pendingCount)
+    }
+
+    /// A minimal application menu with a standard Edit submenu. Without one,
+    /// Cmd+C/Cmd+V/Cmd+X/Cmd+A don't work anywhere in the app: those
+    /// shortcuts are dispatched by AppKit matching them against a menu
+    /// item's key equivalent (which then forwards the action, e.g. `paste:`,
+    /// up the responder chain) — with no main menu at all, that dispatch
+    /// never happens, even though the focused text view implements `paste:`
+    /// itself. This bit the settings window's text fields directly.
+    private static func buildMainMenu() -> NSMenu {
+        let mainMenu = NSMenu()
+
+        let appMenuItem = NSMenuItem()
+        mainMenu.addItem(appMenuItem)
+        let appMenu = NSMenu()
+        appMenuItem.submenu = appMenu
+        appMenu.addItem(withTitle: "Quit WorkTracker", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+
+        let editMenuItem = NSMenuItem()
+        mainMenu.addItem(editMenuItem)
+        let editMenu = NSMenu(title: "Edit")
+        editMenuItem.submenu = editMenu
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+        return mainMenu
     }
 
     private func recordActivity() {
