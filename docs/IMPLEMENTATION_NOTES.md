@@ -77,9 +77,10 @@ Verified against current Vercel docs: real, and it applies specifically to
 "one file in `api/` = one Function" deployments without a meta-framework —
 Hobby caps that at 12. Rather than approach that ceiling with one file per
 endpoint, all routes are bundled into a single Hono app served by one
-catch-all Vercel Function (`api/[[...path]].ts`), which removes the limit
-entirely and lets all endpoints share a warm instance (relevant since the
-dashboard polls `/api/stats/live` every 15s).
+catch-all Vercel Function (`api/index.ts`, see below for why it isn't
+`api/[[...path]].ts`), which removes the limit entirely and lets all
+endpoints share a warm instance (relevant since the dashboard polls
+`/api/stats/live` every 15s).
 
 ## Multi-device double-counting test coverage
 
@@ -87,6 +88,44 @@ dashboard polls `/api/stats/live` every 15s).
 two devices with fully overlapping 09:00–10:00 activity and asserts the
 summed total reads as ~1 hour, not ~2 — directly covering the risk called
 out in `CONCEPT.md`.
+
+## Bugs found only by testing the live deployment (not caught by the test suite)
+
+The route tests exercise the Hono app in-process (`app.request(...)`) and
+never caught these — they're specific to how Vercel routes real HTTP
+requests to the deployed function, or to using a real Postgres instance
+instead of the in-memory fakes. Recorded here because they're easy to
+reintroduce if the routing or middleware setup changes again.
+
+- **`@worktracker/core` had no build step.** Its `package.json` pointed
+  `main`/`types` at raw `.ts` source. Vercel's function bundler leaves
+  workspace dependencies for Node's runtime `import` resolution instead of
+  inlining them, and Node can't load `.ts` files — every request that
+  touched core logic crashed with `ERR_MODULE_NOT_FOUND`. Fixed by adding a
+  `build` script (`tsc`) to `packages/core` and a root `build` script that
+  Vercel now runs before bundling `api/`.
+- **GET requests to multi-segment `/api/*` paths never reached the
+  function.** The file was originally `api/[[...path]].ts`. In this
+  zero-config (no meta-framework) deployment mode, Vercel's auto-generated
+  route for that filename only matched a single path segment
+  (`^/api/([^/]+)$`), so e.g. `/api/stats/first-activity` fell through to
+  Vercel's own 404 page while single-segment paths like `/api/events`
+  worked. Fixed by renaming to `api/index.ts` and adding an explicit
+  `vercel.json` rewrite (`/api/:path*` → `/api`) whose destination now
+  resolves to a real function.
+- **Auth bypass on `/api/devices/:id`.** The dashboard-session middleware
+  was registered as `app.use("/api/devices*", ...)` — without a slash before
+  the wildcard, Hono only matches that pattern against the *exact* base
+  path, not sub-paths. `PATCH`/`DELETE /api/devices/:id` silently skipped
+  the middleware and ran fully unauthenticated. Found by `curl`-testing the
+  live deployment without a session cookie and watching a device actually
+  get revoked. Fixed by registering both the exact path and the `/*`
+  sub-path form for `stats`, `settings`, and `devices`, with regression
+  tests added in `test/routes/devices.test.ts`.
+- **Malformed device IDs crashed with a raw Postgres error (500).** A
+  non-UUID `:id` reached `PostgresDevicesRepository` and Postgres rejected
+  the query with `invalid input syntax for type uuid`. Fixed with a UUID
+  format check before hitting the repository, returning a normal 404.
 
 ## Not yet implemented (flagged in `API_CONTRACT.md`, still open)
 
