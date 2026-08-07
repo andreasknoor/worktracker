@@ -138,6 +138,25 @@ dashboard's `localStorage` — surfaces as a `404` the frontend can react to,
 rather than silently returning an empty "all zeros" result. The dashboard
 header has a matching device dropdown backed by `GET /api/devices`.
 
+## Mac tracker: menu-bar icon invisible when run via `swift run`
+
+Not caught by the unit test suite (it only exercises `Config`,
+`shouldRecordActivity`, and `ActivityQueue` against fakes — no real AppKit
+UI). Found by actually running the app: launching the raw SwiftPM
+executable (`swift run` / the binary in `.build/`) starts the process fine,
+but the menu-bar icon often doesn't render. The unified system log showed
+`[com.apple.AppKit:WindowTab] Cannot index window tabs due to missing main
+bundle identifier` — a bundle-less process has no `CFBundleIdentifier`, and
+Control Center's status-item scene registration can silently fail to draw
+an icon without one, even though the XPC handshake with
+`com.apple.controlcenter.statusitems` completes. Fixed by adding
+`mac-tracker/Info.plist` and `mac-tracker/build-app.sh`, which packages the
+built binary into a proper `dist/WorkTrackerTracker.app` (`LSUIElement` true
+to stay out of the Dock). Run via `open dist/WorkTrackerTracker.app`, not
+`swift run`. Confirmed fixed via `lsappinfo`, which now shows the process
+registered under `com.worktracker.tracker` / "WorkTracker" instead of
+anonymously.
+
 ## Not yet implemented
 
 - Windows tracker (`windows-tracker/` is a placeholder directory). Only the

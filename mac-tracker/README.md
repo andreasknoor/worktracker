@@ -24,9 +24,24 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 
 ## Run
 
+Run it as a proper `.app` bundle, not the raw `swift run`/`.build/` binary —
+a bundle-less process has no `CFBundleIdentifier`, and AppKit logs "missing
+main bundle identifier" for it. In practice this means Control Center often
+fails to render the menu-bar icon at all, even though the process is alive
+and the status item registration technically succeeds.
+
 ```sh
-swift run
+./build-app.sh          # builds a release binary and packages dist/WorkTrackerTracker.app
+open dist/WorkTrackerTracker.app
 ```
+
+To stop it: `pkill -f WorkTrackerTracker` (there's no Dock icon to quit
+from — `LSUIElement` in `Info.plist` hides it from the Dock and app
+switcher — but the **Quit WorkTracker** menu-bar item works too).
+
+`swift run` still works for quick local iteration on non-UI logic, but
+don't rely on it to actually verify the menu-bar icon shows up — only the
+bundled `.app` reliably does.
 
 On first launch the menu-bar icon shows "Not configured". Open
 **Settings…** and enter the server URL (e.g.
