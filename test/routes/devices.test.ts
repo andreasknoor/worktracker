@@ -148,6 +148,54 @@ describe("Device management", () => {
     const list = await (await authed(ctx, "/api/devices")).json();
     expect(list[0].revoked).toBe(true);
   });
+
+  // Regression test: a path-prefix pattern without a slash before the
+  // wildcard ("/api/devices*") only matches the exact base path in Hono, not
+  // sub-paths — which let PATCH/DELETE to /api/devices/:id run
+  // unauthenticated in production before this was caught and fixed.
+  it("rejects PATCH to /api/devices/:id without a valid session cookie", async () => {
+    const created = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "A", platform: "mac" }),
+      })
+    ).json();
+
+    const response = await ctx.app.request(`/api/devices/${created.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idleThresholdMinutes: 15 }),
+    });
+
+    expect(response.status).toBe(401);
+  });
+
+  it("rejects DELETE to /api/devices/:id without a valid session cookie", async () => {
+    const created = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "A", platform: "mac" }),
+      })
+    ).json();
+
+    const response = await ctx.app.request(`/api/devices/${created.id}`, { method: "DELETE" });
+
+    expect(response.status).toBe(401);
+  });
+
+  it("returns 404 instead of crashing when the device id is not a valid uuid", async () => {
+    const patchResponse = await authed(ctx, "/api/devices/not-a-uuid", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idleThresholdMinutes: 15 }),
+    });
+    expect(patchResponse.status).toBe(404);
+
+    const deleteResponse = await authed(ctx, "/api/devices/not-a-uuid", { method: "DELETE" });
+    expect(deleteResponse.status).toBe(404);
+  });
 });
 
 describe("Event ingestion", () => {

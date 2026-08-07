@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context, type Next } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import {
   addDays,
@@ -61,24 +61,24 @@ export function createApp(deps: AppDependencies): Hono {
     return c.json({ ok: true });
   });
 
-  app.use("/api/stats/*", async (c, next) => {
+  const requireDashboardSession = async (c: Context, next: Next) => {
     if (!verifySessionToken(getCookie(c, DASHBOARD_SESSION_COOKIE))) {
       return c.json({ error: "Unauthorized" }, 401);
     }
     await next();
-  });
-  app.use("/api/settings/*", async (c, next) => {
-    if (!verifySessionToken(getCookie(c, DASHBOARD_SESSION_COOKIE))) {
-      return c.json({ error: "Unauthorized" }, 401);
-    }
-    await next();
-  });
-  app.use("/api/devices*", async (c, next) => {
-    if (!verifySessionToken(getCookie(c, DASHBOARD_SESSION_COOKIE))) {
-      return c.json({ error: "Unauthorized" }, 401);
-    }
-    await next();
-  });
+  };
+
+  // A pattern like "/api/devices*" (no slash before the wildcard) only
+  // matches the exact base path in Hono, NOT sub-paths like
+  // "/api/devices/:id" — that gap previously let PATCH/DELETE requests reach
+  // their handlers unauthenticated. Registering both the exact path and the
+  // "/*" sub-path form avoids relying on that glued-wildcard behavior.
+  app.use("/api/stats", requireDashboardSession);
+  app.use("/api/stats/*", requireDashboardSession);
+  app.use("/api/settings", requireDashboardSession);
+  app.use("/api/settings/*", requireDashboardSession);
+  app.use("/api/devices", requireDashboardSession);
+  app.use("/api/devices/*", requireDashboardSession);
 
   // ---------- Stats ----------
 
@@ -286,6 +286,8 @@ export function createApp(deps: AppDependencies): Hono {
   // requested for this rewrite; see docs/IMPLEMENTATION_NOTES.md.
   app.patch("/api/devices/:id", async (c) => {
     const id = c.req.param("id");
+    if (!isUuid(id)) return c.json({ error: "Device not found" }, 404);
+
     const body = await c.req.json<{ idleThresholdMinutes?: number; pollIntervalSeconds?: number }>();
 
     if (body.idleThresholdMinutes !== undefined && body.idleThresholdMinutes <= 0) {
@@ -309,6 +311,8 @@ export function createApp(deps: AppDependencies): Hono {
 
   app.delete("/api/devices/:id", async (c) => {
     const id = c.req.param("id");
+    if (!isUuid(id)) return c.json({ error: "Device not found" }, 404);
+
     const revoked = await deps.devices.revoke(id, Date.now());
     if (!revoked) return c.json({ error: "Device not found" }, 404);
     return c.body(null, 204);
@@ -345,4 +349,11 @@ export function createApp(deps: AppDependencies): Hono {
 
 function addOneDay(d: Date): Date {
   return new Date(d.getTime() + 86_400_000);
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Rejects malformed device IDs before they reach Postgres, which otherwise throws on invalid uuid syntax. */
+function isUuid(value: string): boolean {
+  return UUID_PATTERN.test(value);
 }
