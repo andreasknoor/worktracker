@@ -6,9 +6,11 @@
     "packages/*"
   ],
   "scripts": {
+    "build": "npm run build --workspace=@worktracker/core",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc --noEmit && tsc -b packages/core --noEmit",
+    "db:apply-schema": "node scripts/apply-schema.mjs"
   },
   "dependencies": {
     "@worktracker/core": "*",

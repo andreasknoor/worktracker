@@ -13,3 +13,4 @@ dist/
 # Swift Package Manager build artifacts
 mac-tracker/.build/
 mac-tracker/.swiftpm/
+.vercel
