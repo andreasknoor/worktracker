@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WorkTracker Dashboard</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div class="page">
+
+  <header class="app-header">
+    <div>
+      <h1>WorkTracker</h1>
+      <div class="subtitle">Activity from all your registered devices, combined into one timeline.</div>
+    </div>
+    <div class="header-actions">
+      <button class="icon-btn" id="themeToggle" title="Toggle dark mode" aria-label="Toggle dark mode">
+        <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></svg>
+      </button>
+      <button class="icon-btn" id="devicesToggle" title="Devices" aria-label="Devices">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="4" width="16" height="12" rx="2"></rect>
+          <path d="M8 20h8M12 16v4"></path>
+        </svg>
+      </button>
+      <button class="icon-btn" id="settingsToggle" title="Dashboard settings" aria-label="Dashboard settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="live-ring-bar" id="liveBar" data-active="false">
+    <div class="live-ring-wrap">
+      <svg class="live-ring" viewBox="0 0 148 148">
+        <circle class="live-ring-track" cx="74" cy="74" r="62"></circle>
+        <circle class="live-ring-progress" id="liveRingProgress" cx="74" cy="74" r="62" stroke-dasharray="389.6" stroke-dashoffset="389.6"></circle>
+      </svg>
+      <div class="live-ring-center">
+        <div class="live-ring-today" id="liveTodayValue">00:00:00</div>
+        <div class="live-ring-goal" id="liveGoalLabel">of 8h goal</div>
+      </div>
+    </div>
+    <div class="live-ring-side">
+      <div class="live-ring-session-label">
+        <span class="live-status-dot" id="liveStatusDot"></span>
+        <span id="liveSessionLabel">Current session</span>
+      </div>
+      <div class="live-ring-session-value" id="liveSessionValue">00:00:00</div>
+      <div class="live-ring-hint" id="liveSessionHint"></div>
+    </div>
+  </div>
+
+  <div class="filter-row" role="group" aria-label="Date range">
+    <button class="filter-chip" data-range="1" aria-pressed="false">
+      <svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8l3.5 3.5L13 5"></path></svg>
+      Today
+    </button>
+    <button class="filter-chip" data-range="7" aria-pressed="true">
+      <svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8l3.5 3.5L13 5"></path></svg>
+      Last 7 days
+    </button>
+    <button class="filter-chip" data-range="30" aria-pressed="false">
+      <svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8l3.5 3.5L13 5"></path></svg>
+      Last 30 days
+    </button>
+    <button class="filter-chip" data-range="90" aria-pressed="false">
+      <svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8l3.5 3.5L13 5"></path></svg>
+      Last 90 days
+    </button>
+    <button class="filter-chip" data-range="all" aria-pressed="false">
+      <svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8l3.5 3.5L13 5"></path></svg>
+      All time
+    </button>
+  </div>
+
+  <div class="stat-grid" id="statGrid"></div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="titles">
+        <h2 id="periodTitle">Weekly overview</h2>
+        <div class="caption" id="weeklyCaption">Hours worked per day</div>
+      </div>
+      <div class="card-controls">
+        <div class="segmented" role="group" aria-label="Chart display mode" id="displayModeGroup">
+          <button class="segmented-btn" data-display="totals" aria-pressed="true">Totals</button>
+          <button class="segmented-btn" data-display="timeline" aria-pressed="false">Timeline</button>
+        </div>
+        <div class="segmented" role="group" aria-label="Period view">
+          <button class="segmented-btn" data-period="week" aria-pressed="true">Week</button>
+          <button class="segmented-btn" data-period="month" aria-pressed="false">Month</button>
+        </div>
+        <button class="nav-btn" id="periodPrev" aria-label="Previous period">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"></path></svg>
+        </button>
+        <span class="week-range" id="periodRange"></span>
+        <button class="nav-btn" id="periodNext" aria-label="Next period">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"></path></svg>
+        </button>
+        <button class="table-toggle" data-target="weekly">View as table</button>
+      </div>
+    </div>
+    <div class="chart-wrap" id="weeklyChartWrap" data-view="chart">
+      <svg class="chart-svg" id="weeklySvg" viewBox="0 0 1040 260" preserveAspectRatio="xMidYMid meet"></svg>
+      <svg class="chart-svg" id="timelineSvg" viewBox="0 0 1040 320" preserveAspectRatio="xMidYMid meet" style="display:none"></svg>
+      <div class="data-table-wrap" id="weeklyTableWrap"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="titles">
+        <h2>Daily hours trend</h2>
+        <div class="caption" id="trendCaption"></div>
+      </div>
+      <div class="card-controls">
+        <button class="table-toggle" data-target="trend">View as table</button>
+      </div>
+    </div>
+    <div class="chart-wrap" id="trendChartWrap" data-view="chart">
+      <svg class="chart-svg" id="trendSvg" viewBox="0 0 1040 260" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="data-table-wrap" id="trendTableWrap"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="titles">
+        <h2>Session log</h2>
+        <div class="caption" id="sessionCaption">Individual tracked sessions in the selected range</div>
+      </div>
+    </div>
+    <div class="data-table-wrap" style="display:block" id="sessionTableWrap"></div>
+  </div>
+
+  <footer class="notes">
+    Idle threshold and poll interval are read from the tracker's live settings. Change them in the settings panel above.
+  </footer>
+
+</div>
+
+<div class="chart-tooltip" id="tooltip">
+  <div class="tt-label" id="ttLabel"></div>
+  <div class="tt-value" id="ttValue"></div>
+</div>
+
+<div class="modal-overlay" id="settingsOverlay">
+  <div class="modal">
+    <h3>Dashboard settings</h3>
+    <p class="modal-sub">Idle threshold and poll interval are configured per device — see the Devices panel.</p>
+
+    <div class="field">
+      <label>Core hours</label>
+      <div class="field-row">
+        <input type="time" id="coreHoursStart">
+        <span class="field-row-sep">–</span>
+        <input type="time" id="coreHoursEnd">
+      </div>
+      <div class="hint">Highlighted as the core-hours band in the weekly timeline view.</div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn" id="settingsCancel">Cancel</button>
+      <button class="btn primary" id="settingsSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="devicesOverlay">
+  <div class="modal">
+    <h3>Devices</h3>
+    <p class="modal-sub">Each device has its own idle threshold and poll interval.</p>
+
+    <div id="devicesList" class="devices-list"></div>
+
+    <div class="field-row" style="margin-top: 12px;">
+      <input type="text" id="newDeviceName" placeholder="Device name, e.g. Work Laptop">
+      <select id="newDevicePlatform">
+        <option value="windows">Windows</option>
+        <option value="mac">Mac</option>
+      </select>
+      <button class="btn primary" id="addDeviceBtn">Add</button>
+    </div>
+
+    <div id="newApiKeyBox" class="hint" style="display:none;"></div>
+
+    <div class="modal-actions">
+      <button class="btn" id="devicesClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="loginOverlay">
+  <div class="modal">
+    <h3>Sign in</h3>
+    <p class="modal-sub">This dashboard is password-protected.</p>
+
+    <div class="field">
+      <label for="loginPassword">Password</label>
+      <input type="password" id="loginPassword">
+    </div>
+    <div id="loginError" class="hint" style="display:none; color: var(--danger, #d33);">Incorrect password</div>
+
+    <div class="modal-actions">
+      <button class="btn primary" id="loginSubmit">Sign in</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast">Settings saved</div>
+
+<script src="js/app.js"></script>
+</body>
+</html>

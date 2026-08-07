@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.vercel/
+*.tsbuildinfo
+.DS_Store
+
+# Original handoff briefing package — copied into docs/, not part of the deployed project.
+/handoff-package/
+.env
+.env.local
+.env*.local
+
+# Swift Package Manager build artifacts
+mac-tracker/.build/
+mac-tracker/.swiftpm/
