@@ -18,9 +18,14 @@ final class StatusBarController {
         statusMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         pendingMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
 
+        // A lone small SF Symbol dot is easy to miss (or mistake for another
+        // app's icon) in a crowded menu bar. Pairing it with a short text
+        // label makes the item unmistakable.
         statusItem.button?.image = NSImage(
             systemSymbolName: "circle.dashed", accessibilityDescription: "WorkTracker"
         )
+        statusItem.button?.imagePosition = .imageLeading
+        statusItem.button?.title = "WTK"
 
         let menu = NSMenu()
         menu.addItem(statusMenuItem)
