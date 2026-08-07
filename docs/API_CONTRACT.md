@@ -132,7 +132,14 @@ Request: `{ "name": "...", "platform": "windows" | "mac" }`. Response includes t
 ### `DELETE /api/devices/{id}`
 Revokes the device's key (soft-revoke — see `DATA_MODEL.md`). `204` on success.
 
-## Not yet decided — flag during implementation, don't silently assume
+## Per-device filtering
 
-- Whether stats endpoints need an optional `deviceId` filter (to view one machine's activity separately) in addition to the default all-devices aggregate.
-- Exact auth mechanism for the dashboard's own endpoints (`/api/stats/*`, `/api/settings/*`, `/api/devices*`) now that it's a public URL instead of localhost-only. These were previously unauthenticated because only the local machine could reach them at all.
+All `/api/stats/*` endpoints accept an optional `?deviceId=` query param,
+scoping the result to a single device instead of the merged all-devices view.
+An unknown or malformed id returns `404` rather than silently empty data. See
+`docs/IMPLEMENTATION_NOTES.md`.
+
+## Resolved during implementation
+
+- Dashboard auth: hand-rolled password + signed session cookie gate. See
+  `docs/IMPLEMENTATION_NOTES.md` D3.

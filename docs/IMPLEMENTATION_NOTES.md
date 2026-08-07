@@ -127,7 +127,18 @@ reintroduce if the routing or middleware setup changes again.
   the query with `invalid input syntax for type uuid`. Fixed with a UUID
   format check before hitting the repository, returning a normal 404.
 
-## Not yet implemented (flagged in `API_CONTRACT.md`, still open)
+## D5 — Per-device stats filtering
 
-- Optional `deviceId` filter on stats endpoints, to view one machine's
-  activity separately from the combined stream. Left out of v1.
+Added after v1: all `/api/stats/*` endpoints accept an optional `?deviceId=`
+query param, scoping the session calculation to a single device instead of
+the merged all-devices view. `resolveDeviceIdFilter` in `src/server/app.ts`
+validates the id against the devices repository (not just uuid syntax), so a
+stale id — e.g. a device just revoked/removed, still cached in the
+dashboard's `localStorage` — surfaces as a `404` the frontend can react to,
+rather than silently returning an empty "all zeros" result. The dashboard
+header has a matching device dropdown backed by `GET /api/devices`.
+
+## Not yet implemented
+
+- Windows tracker (`windows-tracker/` is a placeholder directory). Only the
+  Mac tracker (`mac-tracker/`) exists so far.
