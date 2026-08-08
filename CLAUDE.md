@@ -120,6 +120,22 @@ swift test    # requires the full Xcode toolchain's XCTest.framework; if
   per day touched (reusing the timeline chart's `dailySegments` clipping
   logic); a session ending exactly at midnight formats as `"24:00"`.
 
+## Versioning
+
+The app version (`package.json`'s `version` field, mirrored in
+`APP_VERSION` in `src/server/config.ts`, served at `GET /api/version`, and
+shown in the dashboard header) started at `1.0`.
+
+**When making a "normal" change to this project, bump the minor number**
+(`1.0` → `1.1` → `1.2` → ...) as part of that change — this is standing
+instruction, not something to ask about each time. **Only bump the major
+number** (`1.x` → `2.0`, resetting minor to `0`) when the user explicitly
+asks for a major-version bump. Keep `package.json` and
+`src/server/config.ts`'s `APP_VERSION` equal — they're two separate
+constants (not one JSON import) because `src/server/*.ts` runs directly in
+Vercel's per-file Node Function build, which doesn't guarantee a
+working-directory-relative file read of `package.json` at runtime.
+
 ## Documentation
 
 - `docs/CONCEPT.md` — architecture and stack rationale.

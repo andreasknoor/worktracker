@@ -1,6 +1,20 @@
 /** Central place for reading environment-driven configuration. */
 
 /**
+ * App version, shown in the dashboard header and returned by `GET
+ * /api/version`. Keep this in sync with `package.json`'s `version` field —
+ * they're two separate constants (not one JSON import) because this file
+ * runs directly in Vercel's per-file Node Function build, which doesn't
+ * guarantee a working-directory-relative file read of package.json at
+ * runtime.
+ *
+ * Versioning policy: "normal" changes bump the minor number (1.0 -> 1.1 ->
+ * 1.2 -> ...); a major bump (-> 2.0, resetting minor to 0) only happens when
+ * explicitly requested.
+ */
+export const APP_VERSION = "1.0";
+
+/**
  * IANA time zone used for every day-boundary computation ("today", midnight
  * splits, week/month ranges). Vercel Functions run in a fixed region (UTC
  * process time), so this must be set explicitly rather than relying on the

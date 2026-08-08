@@ -88,6 +88,12 @@ header.app-header .subtitle {
   color: var(--text-secondary);
   margin-top: 2px;
 }
+.app-version {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+  vertical-align: middle;
+}
 .header-actions { display: flex; gap: 8px; align-items: center; }
 .device-filter-select {
   height: 36px;

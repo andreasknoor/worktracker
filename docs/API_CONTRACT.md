@@ -155,6 +155,19 @@ scoping the result to a single device instead of the merged all-devices view.
 An unknown or malformed id returns `404` rather than silently empty data. See
 `docs/IMPLEMENTATION_NOTES.md`.
 
+## Day-type filtering
+
+`GET /api/stats/week`, `/week-timeline`, `/month`, `/summary`, and
+`/sessions` accept an optional `?dayType=all|weekday|weekend` query param
+(default `all`). `weekday` scopes to Mon-Fri, `weekend` to Sat-Sun. An
+unrecognized value returns `400`. Endpoints that return a fixed calendar
+shape (`week`, `week-timeline`, `month`) keep every date in the response but
+zero out non-matching days (`hours: 0` / `segments: []`) rather than
+shrinking the array, so callers can keep rendering a full calendar grid.
+`summary`'s `longestSessionMinutes` is scoped to sessions whose *start* falls
+on a matching day. `live` and `first-activity` don't accept this param — a
+"day type" filter doesn't apply to "right now" or to an anchor date.
+
 ## Resolved during implementation
 
 - Dashboard auth: hand-rolled password + signed session cookie gate. See

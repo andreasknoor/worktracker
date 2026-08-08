@@ -4,6 +4,7 @@ import {
   dateKeyInZone,
   daysBetween,
   formatHHmm,
+  isWeekend,
   minutesSinceMidnight,
   mondayOnOrBefore,
   monthEndExclusive,
@@ -77,6 +78,20 @@ describe("time helpers", () => {
       // 2026-06-15T00:30:00Z is still 2026-06-14 evening in America/New_York (UTC-4 in June).
       const ms = Date.UTC(2026, 5, 15, 0, 30, 0);
       expect(dateKeyInZone(ms, "America/New_York")).toBe("2026-06-14");
+    });
+  });
+
+  describe("isWeekend", () => {
+    it("returns false for weekdays", () => {
+      // 2026-01-05 .. 2026-01-09 is Mon .. Fri.
+      for (const d of ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"]) {
+        expect(isWeekend(d)).toBe(false);
+      }
+    });
+
+    it("returns true for Saturday and Sunday", () => {
+      expect(isWeekend("2026-01-10")).toBe(true); // Saturday
+      expect(isWeekend("2026-01-11")).toBe(true); // Sunday
     });
   });
 

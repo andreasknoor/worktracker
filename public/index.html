@@ -11,7 +11,7 @@
 
   <header class="app-header">
     <div>
-      <h1>WorkTracker</h1>
+      <h1>WorkTracker <span class="app-version" id="appVersion"></span></h1>
       <div class="subtitle">Activity from all your registered devices, combined into one timeline.</div>
     </div>
     <div class="header-actions">
@@ -80,6 +80,11 @@
       <svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8l3.5 3.5L13 5"></path></svg>
       All time
     </button>
+    <div class="segmented" role="group" aria-label="Day type" id="dayTypeGroup" style="margin-left: 8px;">
+      <button class="segmented-btn" data-day-type="all" aria-pressed="true">All days</button>
+      <button class="segmented-btn" data-day-type="weekday" aria-pressed="false">Weekdays</button>
+      <button class="segmented-btn" data-day-type="weekend" aria-pressed="false">Weekend</button>
+    </div>
   </div>
 
   <div class="stat-grid" id="statGrid"></div>

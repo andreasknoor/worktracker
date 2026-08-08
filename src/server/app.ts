@@ -4,13 +4,18 @@ import {
   addDays,
   dailyHours,
   dailySegments,
+  dateKeyInZone,
   formatHHmm,
+  isWeekend,
   liveView,
   mondayOnOrBefore,
   monthEndExclusive,
   monthStart,
   summary,
+  type DailyHours,
+  type DailySegments,
   type DateKey,
+  type WorkSession,
 } from "@worktracker/core";
 import {
   DASHBOARD_SESSION_COOKIE,
@@ -20,7 +25,7 @@ import {
   verifyDashboardPassword,
   verifySessionToken,
 } from "./auth.js";
-import { appTimeZone, isProduction } from "./config.js";
+import { APP_VERSION, appTimeZone, isProduction } from "./config.js";
 import type { ActivityEventsRepository, DevicesRepository, SettingsRepository } from "./repositories/types.js";
 import { getMergedSessionsInRange } from "./services/sessionsService.js";
 
@@ -55,6 +60,52 @@ function parseDaysParam(c: Context, defaultDays = 7): number | Response {
     return c.json({ error: `days must be an integer between ${MIN_DAYS_PARAM} and ${MAX_DAYS_PARAM}` }, 400);
   }
   return days;
+}
+
+// ---------- Day-type filtering (?dayType=weekday|weekend|all) ----------
+//
+// Lets the dashboard scope a stats endpoint to working days (Mon-Fri) or
+// weekend days (Sat-Sun) instead of the full range. Applied at the
+// already-day-bucketed level (DailyHours[]/DailySegments[], each keyed by
+// calendar date) rather than by re-querying, so it composes cleanly with
+// the existing `?deviceId=` filter and every endpoint's own range logic.
+
+type DayType = "all" | "weekday" | "weekend";
+const DAY_TYPE_VALUES: readonly DayType[] = ["all", "weekday", "weekend"];
+
+/** Parses the `?dayType=` query param, returning an error Response on an unrecognized value. */
+function parseDayType(c: Context): DayType | Response {
+  const raw = c.req.query("dayType");
+  if (raw === undefined) return "all";
+  if ((DAY_TYPE_VALUES as readonly string[]).includes(raw)) return raw as DayType;
+  return c.json({ error: `dayType must be one of: ${DAY_TYPE_VALUES.join(", ")}` }, 400);
+}
+
+function matchesDayType(dateKey: DateKey, dayType: DayType): boolean {
+  if (dayType === "all") return true;
+  return isWeekend(dateKey) === (dayType === "weekend");
+}
+
+/** Zeroes out (rather than removes) non-matching days, preserving the full calendar shape callers expect. */
+function filterDailyHours(daily: readonly DailyHours[], dayType: DayType): DailyHours[] {
+  if (dayType === "all") return [...daily];
+  return daily.map((d) => (matchesDayType(d.date, dayType) ? d : { ...d, workedTimeMs: 0 }));
+}
+
+function filterDailySegments(days: readonly DailySegments[], dayType: DayType): DailySegments[] {
+  if (dayType === "all") return [...days];
+  return days.map((d) => (matchesDayType(d.date, dayType) ? d : { ...d, segments: [] }));
+}
+
+/**
+ * Filters sessions by the calendar day their *start* falls on. Used where a
+ * day-type filter needs to affect a raw-session-level stat (e.g.
+ * `longestSessionMinutes`) rather than just a per-day bucket — a session
+ * that happens to cross midnight is attributed to the day it began.
+ */
+function filterSessionsByDayType(sessions: readonly WorkSession[], dayType: DayType, timeZone: string): WorkSession[] {
+  if (dayType === "all") return [...sessions];
+  return sessions.filter((s) => matchesDayType(dateKeyInZone(s.start, timeZone), dayType));
 }
 
 // ---------- Login rate limiting ----------
@@ -130,6 +181,10 @@ export function createApp(deps: AppDependencies): Hono {
     entry.count += 1;
   };
 
+  // Public (no session required) — the dashboard shows this in its header
+  // before the user has logged in.
+  app.get("/api/version", (c) => c.json({ version: APP_VERSION }));
+
   // ---------- Dashboard auth ----------
 
   app.post("/api/auth/login", async (c) => {
@@ -179,6 +234,8 @@ export function createApp(deps: AppDependencies): Hono {
   app.get("/api/stats/week", async (c) => {
     const deviceId = await resolveDeviceIdFilter(c, deps.devices);
     if (deviceId instanceof Response) return deviceId;
+    const dayType = parseDayType(c);
+    if (dayType instanceof Response) return dayType;
 
     const start = c.req.query("start");
     if (!isValidDateKey(start)) {
@@ -193,7 +250,7 @@ export function createApp(deps: AppDependencies): Hono {
       Date.parse(endExclusive + "T00:00:00Z"),
       deviceId,
     );
-    const daily = dailyHours(sessions, start, endExclusive, timeZone);
+    const daily = filterDailyHours(dailyHours(sessions, start, endExclusive, timeZone), dayType);
 
     return c.json({
       weekStart: start,
@@ -205,6 +262,8 @@ export function createApp(deps: AppDependencies): Hono {
   app.get("/api/stats/week-timeline", async (c) => {
     const deviceId = await resolveDeviceIdFilter(c, deps.devices);
     if (deviceId instanceof Response) return deviceId;
+    const dayType = parseDayType(c);
+    if (dayType instanceof Response) return dayType;
 
     const start = c.req.query("start");
     if (!isValidDateKey(start)) {
@@ -219,7 +278,7 @@ export function createApp(deps: AppDependencies): Hono {
       Date.parse(endExclusive + "T00:00:00Z"),
       deviceId,
     );
-    const segments = dailySegments(sessions, start, endExclusive, timeZone);
+    const segments = filterDailySegments(dailySegments(sessions, start, endExclusive, timeZone), dayType);
 
     return c.json({
       weekStart: start,
@@ -231,6 +290,8 @@ export function createApp(deps: AppDependencies): Hono {
   app.get("/api/stats/month", async (c) => {
     const deviceId = await resolveDeviceIdFilter(c, deps.devices);
     if (deviceId instanceof Response) return deviceId;
+    const dayType = parseDayType(c);
+    if (dayType instanceof Response) return dayType;
 
     const monthAnyDate = c.req.query("month");
     if (!isValidDateKey(monthAnyDate)) {
@@ -246,7 +307,7 @@ export function createApp(deps: AppDependencies): Hono {
       Date.parse(endExclusive + "T00:00:00Z"),
       deviceId,
     );
-    const daily = dailyHours(sessions, start, endExclusive, timeZone);
+    const daily = filterDailyHours(dailyHours(sessions, start, endExclusive, timeZone), dayType);
 
     return c.json({
       monthStart: start,
@@ -258,6 +319,8 @@ export function createApp(deps: AppDependencies): Hono {
   app.get("/api/stats/summary", async (c) => {
     const deviceId = await resolveDeviceIdFilter(c, deps.devices);
     if (deviceId instanceof Response) return deviceId;
+    const dayType = parseDayType(c);
+    if (dayType instanceof Response) return dayType;
 
     const days = parseDaysParam(c);
     if (days instanceof Response) return days;
@@ -276,8 +339,8 @@ export function createApp(deps: AppDependencies): Hono {
       Date.parse(endExclusive + "T00:00:00Z"),
       deviceId,
     );
-    const daily = dailyHours(sessions, start, endExclusive, timeZone);
-    const periodSummary = summary(sessions, daily);
+    const daily = filterDailyHours(dailyHours(sessions, start, endExclusive, timeZone), dayType);
+    const periodSummary = summary(filterSessionsByDayType(sessions, dayType, timeZone), daily);
 
     return c.json({
       totalHours: periodSummary.totalWorkedTimeMs / 3_600_000,
@@ -292,6 +355,8 @@ export function createApp(deps: AppDependencies): Hono {
   app.get("/api/stats/sessions", async (c) => {
     const deviceId = await resolveDeviceIdFilter(c, deps.devices);
     if (deviceId instanceof Response) return deviceId;
+    const dayType = parseDayType(c);
+    if (dayType instanceof Response) return dayType;
 
     const days = parseDaysParam(c);
     if (days instanceof Response) return days;
@@ -311,7 +376,7 @@ export function createApp(deps: AppDependencies): Hono {
     // midnight-clipping logic as the timeline chart), so a session spanning
     // midnight shows up as one row per day it touches — see D4 in
     // docs/IMPLEMENTATION_NOTES.md.
-    const segments = dailySegments(sessions, start, endExclusive, timeZone);
+    const segments = filterDailySegments(dailySegments(sessions, start, endExclusive, timeZone), dayType);
     const rows = segments.flatMap((day) =>
       day.segments.map((s) => ({
         date: day.date,

@@ -83,6 +83,7 @@
 
   const DEVICE_STORAGE_KEY = "wtk_selected_device";
   const CORE_HOURS_ONLY_STORAGE_KEY = "wtk_timeline_core_hours_only";
+  const DAY_TYPE_STORAGE_KEY = "wtk_day_type";
 
   const state = {
     rangeDays: 7,        // used for stat tiles / trend / sessions; "all" resolves to a day count once first-activity is known
@@ -96,6 +97,7 @@
     coreHoursEndMinutes: 18 * 60,
     selectedDeviceId: safeGetItem(DEVICE_STORAGE_KEY) || "", // "" = all devices combined
     timelineCoreHoursOnly: safeGetItem(CORE_HOURS_ONLY_STORAGE_KEY) === "1", // crop the timeline y-axis to core hours ± 1h
+    dayType: safeGetItem(DAY_TYPE_STORAGE_KEY) || "all", // "all" | "weekday" | "weekend"
   };
 
   function setSelectedDeviceId(deviceId) {
@@ -107,8 +109,22 @@
     }
   }
 
+  function setDayType(dayType) {
+    state.dayType = dayType || "all";
+    safeSetItem(DAY_TYPE_STORAGE_KEY, state.dayType);
+  }
+
   function withDeviceParam(params) {
     if (state.selectedDeviceId) params.set("deviceId", state.selectedDeviceId);
+    return params;
+  }
+
+  // Every stats endpoint that supports day-of-week scoping shares this —
+  // "live" and "first-activity" deliberately don't call it (see their fetch
+  // functions below).
+  function withStatsParams(params) {
+    withDeviceParam(params);
+    if (state.dayType !== "all") params.set("dayType", state.dayType);
     return params;
   }
 
@@ -165,34 +181,37 @@
   /* ---------- Data fetching ---------- */
 
   async function fetchSummary(rangeDays, endDate) {
-    const params = withDeviceParam(new URLSearchParams({ days: String(rangeDays) }));
+    const params = withStatsParams(new URLSearchParams({ days: String(rangeDays) }));
     if (endDate) params.set("end", isoDate(endDate));
     return fetchJson("/api/stats/summary?" + params.toString());
   }
 
   async function fetchWeek(mondayDate) {
-    const params = withDeviceParam(new URLSearchParams({ start: isoDate(mondayDate) }));
+    const params = withStatsParams(new URLSearchParams({ start: isoDate(mondayDate) }));
     return fetchJson("/api/stats/week?" + params.toString());
   }
 
   async function fetchWeekTimeline(mondayDate) {
-    const params = withDeviceParam(new URLSearchParams({ start: isoDate(mondayDate) }));
+    const params = withStatsParams(new URLSearchParams({ start: isoDate(mondayDate) }));
     return fetchJson("/api/stats/week-timeline?" + params.toString());
   }
 
   async function fetchMonth(anyDateInMonth) {
-    const params = withDeviceParam(new URLSearchParams({ month: isoDate(anyDateInMonth) }));
+    const params = withStatsParams(new URLSearchParams({ month: isoDate(anyDateInMonth) }));
     return fetchJson("/api/stats/month?" + params.toString());
   }
 
   async function fetchFirstActivity() {
+    // Deliberately not day-type-scoped: this anchors the "All time" range
+    // filter and should reflect the first activity ever tracked, regardless
+    // of which day-of-week filter happens to be selected.
     const params = withDeviceParam(new URLSearchParams());
     const query = params.toString();
     return fetchJson("/api/stats/first-activity" + (query ? "?" + query : ""));
   }
 
   async function fetchSessions(rangeDays) {
-    const params = withDeviceParam(new URLSearchParams({ days: String(rangeDays) }));
+    const params = withStatsParams(new URLSearchParams({ days: String(rangeDays) }));
     return fetchJson("/api/stats/sessions?" + params.toString());
   }
 
@@ -761,6 +780,20 @@
       const range = chip.getAttribute("data-range");
       state.rangeIsAllTime = range === "all";
       if (!state.rangeIsAllTime) state.rangeDays = +range;
+      renderAll();
+    });
+  });
+
+  const dayTypeGroup = document.getElementById("dayTypeGroup");
+  dayTypeGroup.querySelectorAll(".segmented-btn").forEach(btn => {
+    if (btn.getAttribute("data-day-type") === state.dayType) {
+      dayTypeGroup.querySelectorAll(".segmented-btn").forEach(b => b.setAttribute("aria-pressed", "false"));
+      btn.setAttribute("aria-pressed", "true");
+    }
+    btn.addEventListener("click", () => {
+      dayTypeGroup.querySelectorAll(".segmented-btn").forEach(b => b.setAttribute("aria-pressed", "false"));
+      btn.setAttribute("aria-pressed", "true");
+      setDayType(btn.getAttribute("data-day-type"));
       renderAll();
     });
   });
@@ -1353,6 +1386,13 @@
       await showLoginOverlay();
     }
   }
+
+  /* ---------- App version (shown in the header, no auth required) ---------- */
+
+  fetch("/api/version")
+    .then(res => res.ok ? res.json() : Promise.reject())
+    .then(data => { document.getElementById("appVersion").textContent = "v" + data.version; })
+    .catch(() => {}); // non-critical — leave the badge empty if this fails
 
   /* ---------- Initial render (after authentication) ---------- */
 

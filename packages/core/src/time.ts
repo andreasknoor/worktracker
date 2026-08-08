@@ -105,3 +105,10 @@ export function mondayOnOrBefore(dateKey: DateKey): DateKey {
   const diff = weekday === 0 ? -6 : 1 - weekday;
   return addDays(dateKey, diff);
 }
+
+/** True if `dateKey` falls on a Saturday or Sunday (UTC-calendar weekday arithmetic). */
+export function isWeekend(dateKey: DateKey): boolean {
+  const [y, m, d] = dateKey.split("-").map(Number) as [number, number, number];
+  const weekday = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0 Sun .. 6 Sat
+  return weekday === 0 || weekday === 6;
+}

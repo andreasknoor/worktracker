@@ -286,6 +286,145 @@ describe("stats query param validation", () => {
     const response = await authedGet(ctx, "/api/stats/summary?days=7&end=not-a-date");
     expect(response.status).toBe(400);
   });
+
+  it("rejects an unrecognized dayType value", async () => {
+    const response = await authedGet(ctx, "/api/stats/summary?days=7&dayType=holiday");
+    expect(response.status).toBe(400);
+  });
+});
+
+describe("day-type filtering (?dayType=weekday|weekend|all)", () => {
+  let ctx: TestContext;
+
+  // 2026-03-09 is a Monday (weekday); 2026-03-14 is a Saturday (weekend).
+  const monday = Date.UTC(2026, 2, 9);
+  const saturday = Date.UTC(2026, 2, 14);
+
+  beforeEach(async () => {
+    ctx = await setUp();
+    await seedDeviceWithEvents(ctx, [
+      monday + 9 * 60 * MINUTE,
+      monday + 9 * 60 * MINUTE + 5 * MINUTE, // 5-min Monday session
+      // The event resuming after the multi-day gap needs a confirming
+      // follow-up within 60s, or it's dropped as an accidental-bump false
+      // positive (see SESSION_LOGIC_SPEC.md rule 3).
+      saturday + 10 * 60 * MINUTE,
+      saturday + 10 * 60 * MINUTE + 30_000,
+      saturday + 10 * 60 * MINUTE + 20 * MINUTE, // 20-min Saturday session
+    ]);
+  });
+
+  it("week: zeroes out non-matching days but keeps the full 7-day calendar shape", async () => {
+    const response = await authedGet(ctx, "/api/stats/week?start=2026-03-09&dayType=weekday");
+    expect(response.status).toBe(200);
+    const week = await response.json();
+
+    expect(week.days).toHaveLength(7);
+    const mon = week.days.find((d: { date: string }) => d.date === "2026-03-09");
+    const sat = week.days.find((d: { date: string }) => d.date === "2026-03-14");
+    expect(mon.hours).toBeGreaterThan(0);
+    expect(sat.hours).toBe(0);
+  });
+
+  it("week: dayType=weekend keeps only the Saturday/Sunday hours", async () => {
+    const response = await authedGet(ctx, "/api/stats/week?start=2026-03-09&dayType=weekend");
+    const week = await response.json();
+
+    const mon = week.days.find((d: { date: string }) => d.date === "2026-03-09");
+    const sat = week.days.find((d: { date: string }) => d.date === "2026-03-14");
+    expect(mon.hours).toBe(0);
+    expect(sat.hours).toBeGreaterThan(0);
+  });
+
+  it("week: dayType=all (default) keeps every day", async () => {
+    const response = await authedGet(ctx, "/api/stats/week?start=2026-03-09");
+    const week = await response.json();
+
+    const mon = week.days.find((d: { date: string }) => d.date === "2026-03-09");
+    const sat = week.days.find((d: { date: string }) => d.date === "2026-03-14");
+    expect(mon.hours).toBeGreaterThan(0);
+    expect(sat.hours).toBeGreaterThan(0);
+  });
+
+  it("week-timeline: excludes segments for non-matching days", async () => {
+    const response = await authedGet(ctx, "/api/stats/week-timeline?start=2026-03-09&dayType=weekday");
+    const timeline = await response.json();
+
+    const mon = timeline.days.find((d: { date: string }) => d.date === "2026-03-09");
+    const sat = timeline.days.find((d: { date: string }) => d.date === "2026-03-14");
+    expect(mon.segments.length).toBeGreaterThan(0);
+    expect(sat.segments).toHaveLength(0);
+  });
+
+  it("summary: totals and longest session only reflect matching days", async () => {
+    const weekdayOnly = await (
+      await authedGet(ctx, "/api/stats/summary?days=7&end=2026-03-16&dayType=weekday")
+    ).json();
+    const weekendOnly = await (
+      await authedGet(ctx, "/api/stats/summary?days=7&end=2026-03-16&dayType=weekend")
+    ).json();
+
+    expect(weekdayOnly.activeDayCount).toBe(1);
+    expect(weekendOnly.activeDayCount).toBe(1);
+    // Monday session is 5 min, Saturday session is 20 min — longest session
+    // must be scoped to the filtered day type, not the whole range.
+    expect(weekdayOnly.longestSessionMinutes).toBeCloseTo(5, 1);
+    expect(weekendOnly.longestSessionMinutes).toBeCloseTo(20, 1);
+  });
+
+  it("sessions: excludes rows for non-matching days", async () => {
+    // /api/stats/sessions has no `?end=` override (always relative to the
+    // real "now"), so this scenario needs its own dynamically-picked
+    // weekday/weekend dates within the last 7 days rather than the fixed
+    // March 2026 dates used above.
+    const sessionsCtx = await setUp();
+    const { weekday, weekend } = recentWeekdayAndWeekendDates();
+    await seedDeviceWithEvents(sessionsCtx, [
+      weekday.getTime() + 9 * 60 * MINUTE,
+      weekday.getTime() + 9 * 60 * MINUTE + 5 * MINUTE,
+      weekend.getTime() + 10 * 60 * MINUTE,
+      weekend.getTime() + 10 * 60 * MINUTE + 30_000,
+      weekend.getTime() + 10 * 60 * MINUTE + 20 * MINUTE,
+    ]);
+
+    const response = await authedGet(sessionsCtx, "/api/stats/sessions?days=7&dayType=weekend");
+    const rows = await response.json();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].date).toBe(weekend.toISOString().slice(0, 10));
+  });
+});
+
+/** Finds a weekday and a weekend date within the last 7 days (today inclusive), in UTC. */
+function recentWeekdayAndWeekendDates(): { weekday: Date; weekend: Date } {
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+
+  let weekday: Date | undefined;
+  let weekend: Date | undefined;
+  for (let i = 0; i < 7; i += 1) {
+    const d = new Date(today.getTime() - i * 86_400_000);
+    const isWeekendDay = d.getUTCDay() === 0 || d.getUTCDay() === 6;
+    if (isWeekendDay && !weekend) weekend = d;
+    if (!isWeekendDay && !weekday) weekday = d;
+  }
+  if (!weekday || !weekend) throw new Error("Could not find both a weekday and a weekend day in the last 7 days");
+  return { weekday, weekend };
+}
+
+describe("GET /api/version", () => {
+  it("is reachable without a session cookie and returns the app version", async () => {
+    const devices = new InMemoryDevicesRepository();
+    const events = new InMemoryActivityEventsRepository();
+    const settings = new InMemorySettingsRepository();
+    const app = createApp({ devices, events, settings });
+
+    const response = await app.request("/api/version");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(typeof body.version).toBe("string");
+    expect(body.version.length).toBeGreaterThan(0);
+  });
 });
 
 describe("dashboard auth gate", () => {
