@@ -14,3 +14,8 @@ dist/
 mac-tracker/.build/
 mac-tracker/.swiftpm/
 .vercel
+
+# .NET build artifacts
+windows-tracker/**/bin/
+windows-tracker/**/obj/
+windows-tracker/**/*.user

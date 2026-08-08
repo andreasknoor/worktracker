@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/WorkTrackerTracker.App/WorkTrackerTracker.App.csproj" />
+    <Project Path="src/WorkTrackerTracker.Core/WorkTrackerTracker.Core.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/WorkTrackerTracker.Core.Tests/WorkTrackerTracker.Core.Tests.csproj" />
+  </Folder>
+</Solution>

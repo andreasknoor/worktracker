@@ -26,7 +26,10 @@ Mac tracker      ─┘                                                   │
   by Vercel and talking to the API via `fetch()`. Password-protected.
 - **Mac tracker** (`mac-tracker/`) — native Swift/AppKit menu-bar app. Buildable and
   testable on macOS only; see `mac-tracker/README.md`.
-- **Windows tracker** (`windows-tracker/`) — not yet implemented.
+- **Windows tracker** (`windows-tracker/`) — .NET/WinForms tray app. The
+  platform-independent core (`WorkTrackerTracker.Core`) is built and tested
+  cross-platform; the tray/`GetLastInputInfo` shell (`WorkTrackerTracker.App`)
+  compiles on macOS but has not yet been run — see `windows-tracker/README.md`.
 
 ## Development
 

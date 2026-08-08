@@ -193,7 +193,28 @@ without Vercel's dev-mode routing layer in between. `.env.local` (via
 `vercel env pull`) points it at the same Neon database as production/preview,
 so local testing exercises real data, not a separate sandboxed DB.
 
+## Windows tracker: scaffolded and partially verified from the Mac
+
+`docs/NOTES_FOR_MAC_BUILD.md`'s split held up in practice: the platform-
+independent half (`WorkTrackerTracker.Core` — config persistence, the
+activity queue, the HTTP client, the idle/poll decision function) was
+written and unit-tested here (21 xUnit tests, `dotnet test`), same as
+`packages/core` and the Mac tracker's testable pieces. The Windows-only
+half (`WorkTrackerTracker.App` — `NotifyIcon`, the `GetLastInputInfo`
+P/Invoke wrapper, the settings dialog, Registry-based autostart) compiles
+cleanly on macOS via `<EnableWindowsTargeting>true</EnableWindowsTargeting>`
+(the exact escape hatch that doc predicted), but has never been run — that
+needs a real Windows machine, See `windows-tracker/README.md` for the list
+of things that still need interactive verification there (tray icon
+visibility, actual idle detection, the Registry autostart entry, and a
+real end-to-end event-post test).
+
+No .NET SDK was preinstalled on this Mac, and `brew install dotnet-sdk`
+needs an interactive sudo password the agent can't supply — worked around
+with Microsoft's official `dotnet-install.sh`, which installs into
+`~/.dotnet` without admin rights (the same approach CI runners use).
+
 ## Not yet implemented
 
-- Windows tracker (`windows-tracker/` is a placeholder directory). Only the
-  Mac tracker (`mac-tracker/`) exists so far.
+- Everything under "Windows tracker" above that requires an actual Windows
+  machine to verify.
