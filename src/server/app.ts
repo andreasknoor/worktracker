@@ -20,9 +20,56 @@ import {
   verifyDashboardPassword,
   verifySessionToken,
 } from "./auth.js";
-import { appTimeZone } from "./config.js";
+import { appTimeZone, isProduction } from "./config.js";
 import type { ActivityEventsRepository, DevicesRepository, SettingsRepository } from "./repositories/types.js";
 import { getMergedSessionsInRange } from "./services/sessionsService.js";
+
+const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Bounds for the `?days=` window used by /api/stats/summary and /api/stats/sessions. */
+const MIN_DAYS_PARAM = 1;
+const MAX_DAYS_PARAM = 366;
+
+/** A device can send at most this many raw timestamps in a single /api/events request. */
+const MAX_EVENTS_PER_REQUEST = 5000;
+
+/** Device display names are user-controlled input rendered in the dashboard UI. */
+const MAX_DEVICE_NAME_LENGTH = 100;
+
+function isValidDateKey(value: string | undefined): value is DateKey {
+  if (!value || !DATE_KEY_PATTERN.test(value)) return false;
+  // Reject calendar-invalid dates like "2024-02-30" (Date.UTC would otherwise
+  // silently roll over into March).
+  const [y, m, d] = value.split("-").map(Number) as [number, number, number];
+  const roundTrip = new Date(Date.UTC(y, m - 1, d));
+  return roundTrip.getUTCFullYear() === y && roundTrip.getUTCMonth() === m - 1 && roundTrip.getUTCDate() === d;
+}
+
+/** Parses and bounds-checks the `?days=` query param, returning an error Response on failure. */
+function parseDaysParam(c: Context, defaultDays = 7): number | Response {
+  const raw = c.req.query("days");
+  if (raw === undefined) return defaultDays;
+
+  const days = Number(raw);
+  if (!Number.isInteger(days) || days < MIN_DAYS_PARAM || days > MAX_DAYS_PARAM) {
+    return c.json({ error: `days must be an integer between ${MIN_DAYS_PARAM} and ${MAX_DAYS_PARAM}` }, 400);
+  }
+  return days;
+}
+
+// ---------- Login rate limiting ----------
+//
+// Best-effort, in-memory, per-warm-instance protection against password
+// brute-forcing on the single shared dashboard password. State resets on
+// cold start, which is an accepted trade-off for a personal single-user
+// tool — the goal is to slow down casual brute-forcing, not to be a
+// bulletproof distributed rate limiter.
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_WINDOW_MS = 15 * 60_000;
+
+function loginClientKey(c: Context): string {
+  return c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+}
 
 export interface AppDependencies {
   devices: DevicesRepository;
@@ -62,17 +109,46 @@ async function resolveDeviceIdFilter(c: Context, devicesRepo: DevicesRepository)
 export function createApp(deps: AppDependencies): Hono {
   const app = new Hono();
   const timeZone = appTimeZone();
+  const loginAttempts = new Map<string, { count: number; windowStart: number }>();
+
+  const isLoginRateLimited = (key: string, nowMs: number): boolean => {
+    const entry = loginAttempts.get(key);
+    if (!entry) return false;
+    if (nowMs - entry.windowStart > LOGIN_WINDOW_MS) {
+      loginAttempts.delete(key);
+      return false;
+    }
+    return entry.count >= LOGIN_MAX_ATTEMPTS;
+  };
+
+  const recordFailedLogin = (key: string, nowMs: number): void => {
+    const entry = loginAttempts.get(key);
+    if (!entry || nowMs - entry.windowStart > LOGIN_WINDOW_MS) {
+      loginAttempts.set(key, { count: 1, windowStart: nowMs });
+      return;
+    }
+    entry.count += 1;
+  };
 
   // ---------- Dashboard auth ----------
 
   app.post("/api/auth/login", async (c) => {
+    const clientKey = loginClientKey(c);
+    const now = Date.now();
+    if (isLoginRateLimited(clientKey, now)) {
+      return c.json({ error: "Too many attempts. Try again later." }, 429);
+    }
+
     const body = await c.req.json<{ password?: string }>().catch(() => ({ password: undefined }));
     if (!body.password || !verifyDashboardPassword(body.password)) {
+      recordFailedLogin(clientKey, now);
       return c.json({ error: "Invalid password" }, 401);
     }
+
+    loginAttempts.delete(clientKey);
     setCookie(c, DASHBOARD_SESSION_COOKIE, createSessionToken(), {
       httpOnly: true,
-      secure: true,
+      secure: isProduction(),
       sameSite: "Strict",
       path: "/",
     });
@@ -104,7 +180,10 @@ export function createApp(deps: AppDependencies): Hono {
     const deviceId = await resolveDeviceIdFilter(c, deps.devices);
     if (deviceId instanceof Response) return deviceId;
 
-    const start = c.req.query("start")!;
+    const start = c.req.query("start");
+    if (!isValidDateKey(start)) {
+      return c.json({ error: "start must be a valid yyyy-MM-dd date" }, 400);
+    }
     const endExclusive = addDays(start, 7);
 
     const sessions = await getMergedSessionsInRange(
@@ -127,7 +206,10 @@ export function createApp(deps: AppDependencies): Hono {
     const deviceId = await resolveDeviceIdFilter(c, deps.devices);
     if (deviceId instanceof Response) return deviceId;
 
-    const start = c.req.query("start")!;
+    const start = c.req.query("start");
+    if (!isValidDateKey(start)) {
+      return c.json({ error: "start must be a valid yyyy-MM-dd date" }, 400);
+    }
     const endExclusive = addDays(start, 7);
 
     const sessions = await getMergedSessionsInRange(
@@ -150,7 +232,10 @@ export function createApp(deps: AppDependencies): Hono {
     const deviceId = await resolveDeviceIdFilter(c, deps.devices);
     if (deviceId instanceof Response) return deviceId;
 
-    const monthAnyDate = c.req.query("month")!;
+    const monthAnyDate = c.req.query("month");
+    if (!isValidDateKey(monthAnyDate)) {
+      return c.json({ error: "month must be a valid yyyy-MM-dd date" }, 400);
+    }
     const start = monthStart(monthAnyDate);
     const endExclusive = monthEndExclusive(monthAnyDate);
 
@@ -174,8 +259,13 @@ export function createApp(deps: AppDependencies): Hono {
     const deviceId = await resolveDeviceIdFilter(c, deps.devices);
     if (deviceId instanceof Response) return deviceId;
 
-    const days = Number(c.req.query("days") ?? "7");
+    const days = parseDaysParam(c);
+    if (days instanceof Response) return days;
+
     const endParam = c.req.query("end");
+    if (endParam !== undefined && !isValidDateKey(endParam)) {
+      return c.json({ error: "end must be a valid yyyy-MM-dd date" }, 400);
+    }
     const endExclusive = endParam ?? isoDateKey(addOneDay(new Date()));
     const start = addDays(endExclusive, -days);
 
@@ -203,7 +293,9 @@ export function createApp(deps: AppDependencies): Hono {
     const deviceId = await resolveDeviceIdFilter(c, deps.devices);
     if (deviceId instanceof Response) return deviceId;
 
-    const days = Number(c.req.query("days") ?? "7");
+    const days = parseDaysParam(c);
+    if (days instanceof Response) return days;
+
     const endExclusive = isoDateKey(addOneDay(new Date()));
     const start = addDays(endExclusive, -days);
 
@@ -274,7 +366,9 @@ export function createApp(deps: AppDependencies): Hono {
   });
 
   app.put("/api/settings/", async (c) => {
-    const body = await c.req.json<{ coreHoursStart?: string; coreHoursEnd?: string }>();
+    const body = await c.req
+      .json<{ coreHoursStart?: string; coreHoursEnd?: string }>()
+      .catch(() => ({ coreHoursStart: undefined, coreHoursEnd: undefined }));
     const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
 
     if (!body.coreHoursStart || !timePattern.test(body.coreHoursStart)) {
@@ -312,14 +406,20 @@ export function createApp(deps: AppDependencies): Hono {
   });
 
   app.post("/api/devices", async (c) => {
-    const body = await c.req.json<{ name?: string; platform?: string }>();
-    if (!body.name || (body.platform !== "windows" && body.platform !== "mac")) {
-      return c.json({ error: "name and platform ('windows' | 'mac') are required" }, 400);
+    const body = await c.req
+      .json<{ name?: string; platform?: string }>()
+      .catch(() => ({ name: undefined, platform: undefined }));
+    const name = body.name?.trim();
+    if (!name || name.length > MAX_DEVICE_NAME_LENGTH || (body.platform !== "windows" && body.platform !== "mac")) {
+      return c.json(
+        { error: `name (1-${MAX_DEVICE_NAME_LENGTH} chars) and platform ('windows' | 'mac') are required` },
+        400,
+      );
     }
 
     const rawApiKey = generateApiKey();
     const device = await deps.devices.create({
-      name: body.name,
+      name,
       platform: body.platform,
       apiKeyHash: hashApiKey(rawApiKey),
     });
@@ -333,7 +433,9 @@ export function createApp(deps: AppDependencies): Hono {
     const id = c.req.param("id");
     if (!isUuid(id)) return c.json({ error: "Device not found" }, 404);
 
-    const body = await c.req.json<{ idleThresholdMinutes?: number; pollIntervalSeconds?: number }>();
+    const body = await c.req
+      .json<{ idleThresholdMinutes?: number; pollIntervalSeconds?: number }>()
+      .catch(() => ({ idleThresholdMinutes: undefined, pollIntervalSeconds: undefined }));
 
     if (body.idleThresholdMinutes !== undefined && body.idleThresholdMinutes <= 0) {
       return c.json({ error: "idleThresholdMinutes must be > 0" }, 400);
@@ -375,8 +477,15 @@ export function createApp(deps: AppDependencies): Hono {
       return c.json({ error: "Invalid or revoked API key" }, 401);
     }
 
-    const body = await c.req.json<{ timestamp?: string; timestamps?: string[] }>();
+    const body = await c.req
+      .json<{ timestamp?: string; timestamps?: string[] }>()
+      .catch(() => ({ timestamp: undefined, timestamps: undefined }));
     const raw = body.timestamps ?? (body.timestamp ? [body.timestamp] : []);
+
+    if (raw.length > MAX_EVENTS_PER_REQUEST) {
+      return c.json({ error: `At most ${MAX_EVENTS_PER_REQUEST} timestamps per request` }, 400);
+    }
+
     const parsed = raw.map((t) => Date.parse(t)).filter((ms) => Number.isFinite(ms));
 
     if (parsed.length === 0) {
@@ -387,6 +496,14 @@ export function createApp(deps: AppDependencies): Hono {
     await deps.devices.touchLastSeen(device.id, Date.now());
 
     return c.body(null, 201);
+  });
+
+  // Normalizes any handler failure we didn't already catch (e.g. a
+  // repository/DB error) to a generic JSON 500 instead of Hono's default
+  // HTML error page, and logs it server-side for diagnosis.
+  app.onError((err, c) => {
+    console.error("Unhandled error:", err);
+    return c.json({ error: "Internal server error" }, 500);
   });
 
   return app;

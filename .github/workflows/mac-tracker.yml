@@ -1,0 +1,27 @@
+name: Mac tracker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mac-tracker/**"
+      - ".github/workflows/mac-tracker.yml"
+  pull_request:
+    paths:
+      - "mac-tracker/**"
+      - ".github/workflows/mac-tracker.yml"
+
+jobs:
+  swift-test:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: mac-tracker
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: swift build
+        run: swift build
+
+      - name: swift test
+        run: swift test

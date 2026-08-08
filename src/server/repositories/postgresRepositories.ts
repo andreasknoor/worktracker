@@ -90,20 +90,29 @@ export class PostgresDevicesRepository implements DevicesRepository {
   }
 }
 
+// Keeps each INSERT well under Postgres's ~65535-bind-parameter limit
+// (2 params/row) regardless of how large a batch the caller passes in.
+const INSERT_CHUNK_SIZE = 1000;
+
 export class PostgresActivityEventsRepository implements ActivityEventsRepository {
   constructor(private readonly pool: Pool) {}
 
   async insertEvents(deviceId: string, timestampsMs: readonly number[]): Promise<void> {
-    if (timestampsMs.length === 0) return;
+    for (let offset = 0; offset < timestampsMs.length; offset += INSERT_CHUNK_SIZE) {
+      const chunk = timestampsMs.slice(offset, offset + INSERT_CHUNK_SIZE);
 
-    const values: string[] = [];
-    const params: unknown[] = [];
-    timestampsMs.forEach((ts, i) => {
-      values.push(`($${i * 2 + 1}, $${i * 2 + 2})`);
-      params.push(deviceId, new Date(ts));
-    });
+      const values: string[] = [];
+      const params: unknown[] = [];
+      chunk.forEach((ts, i) => {
+        values.push(`($${i * 2 + 1}, $${i * 2 + 2})`);
+        params.push(deviceId, new Date(ts));
+      });
 
-    await this.pool.query(`INSERT INTO activity_events (device_id, timestamp_utc) VALUES ${values.join(", ")}`, params);
+      await this.pool.query(
+        `INSERT INTO activity_events (device_id, timestamp_utc) VALUES ${values.join(", ")}`,
+        params,
+      );
+    }
   }
 
   async getEventsInRangeForDevice(deviceId: string, startMs: number, endExclusiveMs: number): Promise<number[]> {

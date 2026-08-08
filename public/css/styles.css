@@ -402,6 +402,10 @@ table.data-table td.num, table.data-table th.num {
 .trend-dot { fill: var(--series-1); stroke: var(--surface-1); stroke-width: 2; }
 .crosshair { stroke: var(--text-muted); stroke-width: 1; opacity: 0; }
 .hit-col { fill: transparent; }
+.hit-col:focus-visible, .timeline-segment:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: -2px;
+}
 .target-line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
 .target-label { font-size: 10px; fill: var(--text-muted); }
 

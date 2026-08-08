@@ -7,7 +7,9 @@
     const response = await fetch(url, options);
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      throw new Error(`Request to ${url} failed (${response.status}): ${text}`);
+      const err = new Error(`Request to ${url} failed (${response.status}): ${text}`);
+      err.status = response.status; // lets callers distinguish a 401 (needs re-login) from other failures
+      throw err;
     }
     return response.json();
   }
@@ -50,6 +52,33 @@
     return r;
   }
 
+  /* ---------- Safe localStorage wrapper ---------- */
+  // localStorage can throw (private browsing, disabled storage, quota) — every
+  // call site goes through here so a failure is a silent no-op / fallback
+  // rather than an uncaught exception that would break the app.
+
+  function safeGetItem(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch (err) {
+      return null;
+    }
+  }
+  function safeSetItem(key, value) {
+    try {
+      localStorage.setItem(key, value);
+    } catch (err) {
+      // Ignore — persistence is a nice-to-have, not required for this session to work.
+    }
+  }
+  function safeRemoveItem(key) {
+    try {
+      localStorage.removeItem(key);
+    } catch (err) {
+      // Ignore, see safeSetItem.
+    }
+  }
+
   /* ---------- State ---------- */
 
   const DEVICE_STORAGE_KEY = "wtk_selected_device";
@@ -65,16 +94,16 @@
     monthOffset: 0,       // 0 = current calendar month, -1 = previous month, etc.
     coreHoursStartMinutes: 9 * 60,  // refreshed from settings; used by the timeline chart
     coreHoursEndMinutes: 18 * 60,
-    selectedDeviceId: localStorage.getItem(DEVICE_STORAGE_KEY) || "", // "" = all devices combined
-    timelineCoreHoursOnly: localStorage.getItem(CORE_HOURS_ONLY_STORAGE_KEY) === "1", // crop the timeline y-axis to core hours ± 1h
+    selectedDeviceId: safeGetItem(DEVICE_STORAGE_KEY) || "", // "" = all devices combined
+    timelineCoreHoursOnly: safeGetItem(CORE_HOURS_ONLY_STORAGE_KEY) === "1", // crop the timeline y-axis to core hours ± 1h
   };
 
   function setSelectedDeviceId(deviceId) {
     state.selectedDeviceId = deviceId || "";
     if (deviceId) {
-      localStorage.setItem(DEVICE_STORAGE_KEY, deviceId);
+      safeSetItem(DEVICE_STORAGE_KEY, deviceId);
     } else {
-      localStorage.removeItem(DEVICE_STORAGE_KEY);
+      safeRemoveItem(DEVICE_STORAGE_KEY);
     }
   }
 
@@ -382,32 +411,43 @@
           (todayFlag ? ' font-weight="600" fill="var(--text-primary)"' : '') + '>' + axisLabel + '</text>');
       }
 
-      parts.push('<rect class="hit-col" data-idx="' + i + '" x="' + (padL + slotW * i).toFixed(1) + '" y="' + padT + '" width="' + slotW.toFixed(1) + '" height="' + plotH + '"></rect>');
+      parts.push('<rect class="hit-col" tabindex="0" data-idx="' + i + '" x="' + (padL + slotW * i).toFixed(1) + '" y="' + padT + '" width="' + slotW.toFixed(1) + '" height="' + plotH + '"></rect>');
     });
 
     svg.innerHTML = parts.join("");
     svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    const totalHours = days.reduce((sum, d) => sum + d.hours, 0);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label",
+      (isMonth ? "Monthly" : "Weekly") + " hours bar chart, " + rangeLabel + ", totaling " + fmtHours(totalHours) + ".");
 
+    function showBarTooltip(idx, clientY) {
+      const d = days[idx];
+      const svgRect = svg.getBoundingClientRect();
+      const scaleX = svgRect.width / W;
+      const cx = padL + slotW * idx + slotW / 2;
+      const label = isMonth
+        ? d.date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+        : formatWeekday(d.date) + ", " + formatShortDate(d.date);
+      showTooltip(svgRect.left + cx * scaleX, clientY,
+        label, d.hours > 0 ? fmtHours(d.hours) : "No activity");
+      svg.querySelectorAll(".bar").forEach(b => b.classList.remove("active"));
+      const bar = svg.querySelector('.bar[data-idx="' + idx + '"]');
+      if (bar) bar.classList.add("active");
+    }
+    function hideBarTooltip() {
+      hideTooltip();
+      svg.querySelectorAll(".bar").forEach(b => b.classList.remove("active"));
+    }
+
+    // pointermove/pointerleave cover hover; focus/blur (via the hit-col rects'
+    // tabindex="0") give keyboard users the same per-bar tooltip on Tab.
     svg.querySelectorAll(".hit-col").forEach(rect => {
       const idx = +rect.getAttribute("data-idx");
-      rect.addEventListener("pointermove", evt => {
-        const d = days[idx];
-        const svgRect = svg.getBoundingClientRect();
-        const scaleX = svgRect.width / W;
-        const cx = padL + slotW * idx + slotW / 2;
-        const label = isMonth
-          ? d.date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
-          : formatWeekday(d.date) + ", " + formatShortDate(d.date);
-        showTooltip(svgRect.left + cx * scaleX, evt.clientY,
-          label, d.hours > 0 ? fmtHours(d.hours) : "No activity");
-        svg.querySelectorAll(".bar").forEach(b => b.classList.remove("active"));
-        const bar = svg.querySelector('.bar[data-idx="' + idx + '"]');
-        if (bar) bar.classList.add("active");
-      });
-      rect.addEventListener("pointerleave", () => {
-        hideTooltip();
-        svg.querySelectorAll(".bar").forEach(b => b.classList.remove("active"));
-      });
+      rect.addEventListener("pointermove", evt => showBarTooltip(idx, evt.clientY));
+      rect.addEventListener("pointerleave", hideBarTooltip);
+      rect.addEventListener("focus", () => showBarTooltip(idx, rect.getBoundingClientRect().top));
+      rect.addEventListener("blur", hideBarTooltip);
     });
 
     renderWeeklyTable(days);
@@ -509,7 +549,7 @@
         const segH = yForMinute(visEnd) - segY;
         if (segH <= 0) return;
         parts.push(
-          '<rect class="timeline-segment" data-day-idx="' + i + '" data-seg-idx="' + segIdx + '" x="' + x.toFixed(1) +
+          '<rect class="timeline-segment" tabindex="0" data-day-idx="' + i + '" data-seg-idx="' + segIdx + '" x="' + x.toFixed(1) +
           '" y="' + segY.toFixed(1) + '" width="' + trackW.toFixed(1) + '" height="' + segH.toFixed(1) + '"></rect>'
         );
       });
@@ -520,26 +560,36 @@
 
     svg.innerHTML = parts.join("");
     svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label",
+      "Timeline chart of daily work periods, " + formatShortDate(monday) + " – " + formatShortDate(sunday) + ".");
 
+    function showSegmentTooltip(rect, dayIdx, segIdx, clientY) {
+      const d = days[dayIdx];
+      const seg = d.segments[segIdx];
+      const svgRect = svg.getBoundingClientRect();
+      const scaleX = svgRect.width / W;
+      const cx = padL + slotW * dayIdx + slotW / 2;
+      const durationLabel = fmtMinutes(seg.endMinutes - seg.startMinutes);
+      const timeLabel = formatMinutesAsClock(seg.startMinutes) + "–" + formatMinutesAsClock(seg.endMinutes);
+      showTooltip(svgRect.left + cx * scaleX, clientY,
+        formatWeekday(d.date) + ", " + formatShortDate(d.date), timeLabel + " (" + durationLabel + ")");
+      rect.classList.add("active");
+    }
+    function hideSegmentTooltip(rect) {
+      hideTooltip();
+      rect.classList.remove("active");
+    }
+
+    // pointermove/pointerleave cover hover; focus/blur (via tabindex="0" on each
+    // segment rect) give keyboard users the same per-segment tooltip on Tab.
     svg.querySelectorAll(".timeline-segment").forEach(rect => {
       const dayIdx = +rect.getAttribute("data-day-idx");
       const segIdx = +rect.getAttribute("data-seg-idx");
-      rect.addEventListener("pointermove", evt => {
-        const d = days[dayIdx];
-        const seg = d.segments[segIdx];
-        const svgRect = svg.getBoundingClientRect();
-        const scaleX = svgRect.width / W;
-        const cx = padL + slotW * dayIdx + slotW / 2;
-        const durationLabel = fmtMinutes(seg.endMinutes - seg.startMinutes);
-        const timeLabel = formatMinutesAsClock(seg.startMinutes) + "–" + formatMinutesAsClock(seg.endMinutes);
-        showTooltip(svgRect.left + cx * scaleX, evt.clientY,
-          formatWeekday(d.date) + ", " + formatShortDate(d.date), timeLabel + " (" + durationLabel + ")");
-        rect.classList.add("active");
-      });
-      rect.addEventListener("pointerleave", () => {
-        hideTooltip();
-        rect.classList.remove("active");
-      });
+      rect.addEventListener("pointermove", evt => showSegmentTooltip(rect, dayIdx, segIdx, evt.clientY));
+      rect.addEventListener("pointerleave", () => hideSegmentTooltip(rect));
+      rect.addEventListener("focus", () => showSegmentTooltip(rect, dayIdx, segIdx, rect.getBoundingClientRect().top));
+      rect.addEventListener("blur", () => hideSegmentTooltip(rect));
     });
 
     renderTimelineTable(days);
@@ -616,29 +666,39 @@
 
     const slotW = plotW / (series.length || 1);
     series.forEach((d, i) => {
-      parts.push('<rect class="hit-col" data-idx="' + i + '" x="' + (padL + slotW * i).toFixed(1) + '" y="' + padT + '" width="' + slotW.toFixed(1) + '" height="' + plotH + '"></rect>');
+      parts.push('<rect class="hit-col" tabindex="0" data-idx="' + i + '" x="' + (padL + slotW * i).toFixed(1) + '" y="' + padT + '" width="' + slotW.toFixed(1) + '" height="' + plotH + '"></rect>');
     });
 
     svg.innerHTML = parts.join("");
     svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "Line chart of daily hours worked over the last " + trendDays + " days.");
 
     const crosshair = svg.querySelector("#trendCrosshair");
+
+    function showTrendTooltip(idx, clientY) {
+      const d = series[idx];
+      const x = xFor(idx);
+      crosshair.setAttribute("x1", x); crosshair.setAttribute("x2", x);
+      crosshair.style.opacity = 1;
+      const svgRect = svg.getBoundingClientRect();
+      const scaleX = svgRect.width / W;
+      showTooltip(svgRect.left + x * scaleX, clientY,
+        formatWeekday(d.date) + ", " + formatShortDate(d.date), d.hours > 0 ? fmtHours(d.hours) : "No activity");
+    }
+    function hideTrendTooltip() {
+      crosshair.style.opacity = 0;
+      hideTooltip();
+    }
+
+    // pointermove/pointerleave cover hover; focus/blur (via tabindex="0" on each
+    // hit-col rect) give keyboard users the same per-point tooltip on Tab.
     svg.querySelectorAll(".hit-col").forEach(rect => {
       const idx = +rect.getAttribute("data-idx");
-      rect.addEventListener("pointermove", evt => {
-        const d = series[idx];
-        const x = xFor(idx);
-        crosshair.setAttribute("x1", x); crosshair.setAttribute("x2", x);
-        crosshair.style.opacity = 1;
-        const svgRect = svg.getBoundingClientRect();
-        const scaleX = svgRect.width / W;
-        showTooltip(svgRect.left + x * scaleX, evt.clientY,
-          formatWeekday(d.date) + ", " + formatShortDate(d.date), d.hours > 0 ? fmtHours(d.hours) : "No activity");
-      });
-      rect.addEventListener("pointerleave", () => {
-        crosshair.style.opacity = 0;
-        hideTooltip();
-      });
+      rect.addEventListener("pointermove", evt => showTrendTooltip(idx, evt.clientY));
+      rect.addEventListener("pointerleave", hideTrendTooltip);
+      rect.addEventListener("focus", () => showTrendTooltip(idx, rect.getBoundingClientRect().top));
+      rect.addEventListener("blur", hideTrendTooltip);
     });
 
     renderTrendTable(series);
@@ -743,19 +803,27 @@
   coreHoursOnlyToggle.checked = state.timelineCoreHoursOnly;
   coreHoursOnlyToggle.addEventListener("change", () => {
     state.timelineCoreHoursOnly = coreHoursOnlyToggle.checked;
-    localStorage.setItem(CORE_HOURS_ONLY_STORAGE_KEY, state.timelineCoreHoursOnly ? "1" : "0");
+    safeSetItem(CORE_HOURS_ONLY_STORAGE_KEY, state.timelineCoreHoursOnly ? "1" : "0");
     renderWeeklyChart();
   });
 
   /* ---------- Wiring: table view toggles ---------- */
 
+  // Screen-reader users navigating by button lose the "weekly" vs. "trend"
+  // distinction if both buttons just say "View as table" — the aria-label
+  // carries the chart name explicitly and is kept in sync with the toggle state.
+  const CHART_NAMES_BY_TARGET = { weekly: "weekly overview", trend: "daily hours trend" };
+
   document.querySelectorAll(".table-toggle").forEach(btn => {
     btn.addEventListener("click", () => {
       const target = btn.getAttribute("data-target");
+      const chartName = CHART_NAMES_BY_TARGET[target] || "chart";
       const wrap = document.getElementById(target + "ChartWrap");
       const isTable = wrap.getAttribute("data-view") === "table";
-      wrap.setAttribute("data-view", isTable ? "chart" : "table");
-      btn.textContent = isTable ? "View as table" : "View as chart";
+      const willBeTable = !isTable;
+      wrap.setAttribute("data-view", willBeTable ? "table" : "chart");
+      btn.textContent = willBeTable ? "View as chart" : "View as table";
+      btn.setAttribute("aria-label", "View " + chartName + (willBeTable ? " as chart" : " as table"));
     });
   });
 
@@ -771,20 +839,12 @@
   }
 
   function loadStoredTheme() {
-    try {
-      const stored = localStorage.getItem(THEME_STORAGE_KEY);
-      return stored === "dark" || stored === "light" ? stored : null;
-    } catch (err) {
-      return null; // localStorage unavailable (private browsing, etc.) — fall back to system preference
-    }
+    const stored = safeGetItem(THEME_STORAGE_KEY);
+    return stored === "dark" || stored === "light" ? stored : null;
   }
 
   function storeTheme(theme) {
-    try {
-      localStorage.setItem(THEME_STORAGE_KEY, theme);
-    } catch (err) {
-      // Ignore — persistence is a nice-to-have, not required for the toggle to work this session.
-    }
+    safeSetItem(THEME_STORAGE_KEY, theme);
   }
 
   let currentTheme = loadStoredTheme() ?? (systemPrefersDark() ? "dark" : "light");
@@ -801,6 +861,59 @@
     storeTheme(currentTheme);
     updateThemeIcon();
     renderAll();
+  });
+
+  /* ---------- Modal helpers: focus trap + focus restore ---------- */
+  // Lightweight, dependency-free focus management shared by every
+  // .modal-overlay: move focus into the dialog on open, keep Tab/Shift+Tab
+  // cycling inside it while open, and return focus to whatever opened it
+  // on close — the accessibility baseline for a modal dialog.
+
+  function getFocusableElements(container) {
+    return Array.from(container.querySelectorAll(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter(el => el.offsetParent !== null);
+  }
+
+  function trapFocus(overlay, evt) {
+    if (evt.key !== "Tab") return;
+    const modal = overlay.querySelector(".modal");
+    const focusables = getFocusableElements(modal);
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (evt.shiftKey && document.activeElement === first) {
+      evt.preventDefault();
+      last.focus();
+    } else if (!evt.shiftKey && document.activeElement === last) {
+      evt.preventDefault();
+      first.focus();
+    }
+  }
+
+  function setupModalFocusTrap(overlay) {
+    overlay.addEventListener("keydown", evt => trapFocus(overlay, evt));
+  }
+
+  function openModal(overlay) {
+    overlay._returnFocusTo = document.activeElement;
+    overlay.classList.add("open");
+    const modal = overlay.querySelector(".modal");
+    const focusables = getFocusableElements(modal);
+    (focusables[0] || modal).focus();
+  }
+
+  function closeModal(overlay) {
+    overlay.classList.remove("open");
+    const returnTo = overlay._returnFocusTo;
+    overlay._returnFocusTo = null;
+    if (returnTo && typeof returnTo.focus === "function") {
+      returnTo.focus();
+    }
+  }
+
+  ["settingsOverlay", "devicesOverlay", "loginOverlay", "connectionErrorOverlay"].forEach(id => {
+    setupModalFocusTrap(document.getElementById(id));
   });
 
   /* ---------- Wiring: settings modal (dashboard-global: core hours only) ---------- */
@@ -822,14 +935,14 @@
       const settings = await fetchSettings();
       coreHoursStartInput.value = settings.coreHoursStart;
       coreHoursEndInput.value = settings.coreHoursEnd;
-      overlay.classList.add("open");
+      openModal(overlay);
     } catch (err) {
       showToast("Could not load settings", true);
     }
   });
 
-  document.getElementById("settingsCancel").addEventListener("click", () => overlay.classList.remove("open"));
-  overlay.addEventListener("click", e => { if (e.target === overlay) overlay.classList.remove("open"); });
+  document.getElementById("settingsCancel").addEventListener("click", () => closeModal(overlay));
+  overlay.addEventListener("click", e => { if (e.target === overlay) closeModal(overlay); });
 
   document.getElementById("settingsSave").addEventListener("click", async () => {
     if (!coreHoursStartInput.value || !coreHoursEndInput.value || coreHoursEndInput.value <= coreHoursStartInput.value) {
@@ -844,7 +957,7 @@
       });
       state.coreHoursStartMinutes = parseHHMMToMinutes(saved.coreHoursStart);
       state.coreHoursEndMinutes = parseHHMMToMinutes(saved.coreHoursEnd);
-      overlay.classList.remove("open");
+      closeModal(overlay);
       showToast("Settings saved");
       renderAll();
     } catch (err) {
@@ -886,19 +999,61 @@
   function renderDeviceRow(device) {
     const row = document.createElement("div");
     row.className = "device-row";
-    row.innerHTML =
-      '<div class="device-row-name">' + device.name + " (" + device.platform + ")" +
-      (device.revoked ? ' <span class="hint">revoked</span>' : "") + "</div>" +
-      '<div class="field-row">' +
-      '<label>Idle (min) <input type="number" min="1" class="device-idle" value="' + device.idleThresholdMinutes + '" ' + (device.revoked ? "disabled" : "") + "></label>" +
-      '<label>Poll (s) <input type="number" min="1" class="device-poll" value="' + device.pollIntervalSeconds + '" ' + (device.revoked ? "disabled" : "") + "></label>" +
-      (device.revoked ? "" : '<button class="btn device-save">Save</button><button class="btn device-revoke">Revoke</button>') +
-      "</div>";
 
-    const idleInput = row.querySelector(".device-idle");
-    const pollInput = row.querySelector(".device-poll");
-    const saveBtn = row.querySelector(".device-save");
-    const revokeBtn = row.querySelector(".device-revoke");
+    // Built via DOM APIs (not innerHTML string concatenation) because device.name
+    // is arbitrary user input (POST /api/devices) with no HTML-escaping anywhere
+    // in the pipeline — concatenating it into innerHTML would be a stored XSS hole.
+    const nameDiv = document.createElement("div");
+    nameDiv.className = "device-row-name";
+    nameDiv.appendChild(document.createTextNode(device.name + " (" + device.platform + ")"));
+    if (device.revoked) {
+      const revokedSpan = document.createElement("span");
+      revokedSpan.className = "hint";
+      revokedSpan.textContent = " revoked";
+      nameDiv.appendChild(revokedSpan);
+    }
+    row.appendChild(nameDiv);
+
+    const fieldRow = document.createElement("div");
+    fieldRow.className = "field-row";
+
+    const idleLabel = document.createElement("label");
+    idleLabel.appendChild(document.createTextNode("Idle (min) "));
+    const idleInput = document.createElement("input");
+    idleInput.type = "number";
+    idleInput.min = "1";
+    idleInput.className = "device-idle";
+    idleInput.value = device.idleThresholdMinutes;
+    idleInput.disabled = !!device.revoked;
+    idleLabel.appendChild(idleInput);
+    fieldRow.appendChild(idleLabel);
+
+    const pollLabel = document.createElement("label");
+    pollLabel.appendChild(document.createTextNode("Poll (s) "));
+    const pollInput = document.createElement("input");
+    pollInput.type = "number";
+    pollInput.min = "1";
+    pollInput.className = "device-poll";
+    pollInput.value = device.pollIntervalSeconds;
+    pollInput.disabled = !!device.revoked;
+    pollLabel.appendChild(pollInput);
+    fieldRow.appendChild(pollLabel);
+
+    let saveBtn = null;
+    let revokeBtn = null;
+    if (!device.revoked) {
+      saveBtn = document.createElement("button");
+      saveBtn.className = "btn device-save";
+      saveBtn.textContent = "Save";
+      fieldRow.appendChild(saveBtn);
+
+      revokeBtn = document.createElement("button");
+      revokeBtn.className = "btn device-revoke";
+      revokeBtn.textContent = "Revoke";
+      fieldRow.appendChild(revokeBtn);
+    }
+
+    row.appendChild(fieldRow);
 
     if (saveBtn) {
       saveBtn.addEventListener("click", async () => {
@@ -945,14 +1100,14 @@
   document.getElementById("devicesToggle").addEventListener("click", async () => {
     newApiKeyBox.style.display = "none";
     await refreshDevicesList();
-    devicesOverlay.classList.add("open");
+    openModal(devicesOverlay);
   });
 
   document.getElementById("devicesClose").addEventListener("click", () => {
-    devicesOverlay.classList.remove("open");
+    closeModal(devicesOverlay);
     refreshDeviceFilterDropdown().catch(err => console.error(err)); // pick up any add/revoke made while the panel was open
   });
-  devicesOverlay.addEventListener("click", e => { if (e.target === devicesOverlay) devicesOverlay.classList.remove("open"); });
+  devicesOverlay.addEventListener("click", e => { if (e.target === devicesOverlay) closeModal(devicesOverlay); });
 
   document.getElementById("addDeviceBtn").addEventListener("click", async () => {
     const nameInput = document.getElementById("newDeviceName");
@@ -1012,10 +1167,17 @@
   deviceFilterSelect.addEventListener("change", () => {
     setSelectedDeviceId(deviceFilterSelect.value);
     syncLive();
-    renderAll().catch(err => {
-      console.error(err);
-      showToast("Could not load dashboard data", true);
-    });
+    function retry() {
+      return renderAll().catch(err => {
+        console.error(err);
+        if (err && err.status === 401) {
+          handleAuthFailureAndRetry(retry);
+        } else {
+          showToast("Could not load dashboard data", true);
+        }
+      });
+    }
+    retry();
   });
 
   /* ---------- Live timer (today worked + current session) ---------- */
@@ -1080,6 +1242,12 @@
       renderLive();
     } catch (err) {
       console.error(err);
+      // The live poll runs every 15s regardless of which card is visible, so it's
+      // the most likely place to first notice an expired session — route back to
+      // login rather than silently failing this tile forever.
+      if (err && err.status === 401) {
+        handleAuthFailureAndRetry(syncLive);
+      }
     }
   }
 
@@ -1095,7 +1263,11 @@
   // The API requires a signed session cookie (see src/server/auth.ts); Vercel's
   // Hobby plan has no built-in way to password-protect a production domain, so
   // the dashboard gates itself. On first load we probe a cheap endpoint; a 401
-  // shows the login overlay before any real data is fetched.
+  // shows the login overlay before any real data is fetched. A network failure
+  // (server unreachable) is distinct from a 401 and gets its own "can't reach
+  // the server" state with a Retry button, rather than either silently
+  // proceeding as if authenticated or showing the login form as if the
+  // password were wrong.
 
   function showLoginOverlay() {
     return new Promise(resolve => {
@@ -1103,8 +1275,9 @@
       const loginPassword = document.getElementById("loginPassword");
       const loginError = document.getElementById("loginError");
       const loginSubmit = document.getElementById("loginSubmit");
-      loginOverlay.classList.add("open");
+      openModal(loginOverlay);
       loginPassword.focus();
+      loginPassword.value = "";
 
       async function submit() {
         loginError.style.display = "none";
@@ -1115,9 +1288,9 @@
             body: JSON.stringify({ password: loginPassword.value }),
           });
           if (res.ok) {
-            loginOverlay.classList.remove("open");
             loginSubmit.removeEventListener("click", submit);
             loginPassword.removeEventListener("keydown", onKeydown);
+            closeModal(loginOverlay);
             resolve();
           } else {
             loginError.style.display = "block";
@@ -1133,8 +1306,49 @@
     });
   }
 
+  function showConnectionErrorOverlay() {
+    return new Promise(resolve => {
+      const connectionErrorOverlay = document.getElementById("connectionErrorOverlay");
+      const retryBtn = document.getElementById("connectionErrorRetry");
+      openModal(connectionErrorOverlay);
+
+      function onRetry() {
+        retryBtn.removeEventListener("click", onRetry);
+        closeModal(connectionErrorOverlay);
+        resolve();
+      }
+      retryBtn.addEventListener("click", onRetry);
+    });
+  }
+
+  // Guards against multiple overlapping login prompts if several in-flight
+  // requests all 401 around the same time (e.g. the initial Promise.all in
+  // renderAll()) — only the first one triggers the re-login flow.
+  let handlingAuthFailure = false;
+
+  async function handleAuthFailureAndRetry(retry) {
+    if (handlingAuthFailure) return;
+    handlingAuthFailure = true;
+    try {
+      await showLoginOverlay();
+      await retry();
+    } finally {
+      handlingAuthFailure = false;
+    }
+  }
+
   async function ensureAuthenticated() {
-    const res = await fetch("/api/stats/first-activity");
+    let res;
+    try {
+      res = await fetch("/api/stats/first-activity");
+    } catch (err) {
+      // Genuine network failure (fetch threw — server unreachable, offline, etc.),
+      // not a 401. Show a dedicated "can't reach the server" state and let the
+      // user retry, rather than treating it as either "authenticated" or
+      // "wrong password".
+      await showConnectionErrorOverlay();
+      return ensureAuthenticated();
+    }
     if (res.status === 401) {
       await showLoginOverlay();
     }
@@ -1143,7 +1357,6 @@
   /* ---------- Initial render (after authentication) ---------- */
 
   ensureAuthenticated()
-    .catch(err => console.error(err)) // fail open on network errors; renderAll() surfaces its own error state
     .then(() => refreshDeviceFilterDropdown().catch(err => console.error(err))) // clears a stale stored deviceId first, so later fetches don't 404 on it
     .then(() => {
       syncLive();
@@ -1161,10 +1374,21 @@
         })
         .catch(err => console.error(err));
 
-      renderAll().catch(err => {
-        console.error(err);
-        showToast("Could not load dashboard data", true);
-      });
+      function renderAllWithAuthHandling() {
+        renderAll().catch(err => {
+          console.error(err);
+          if (err && err.status === 401) {
+            // The session cookie expired/was revoked after the initial check
+            // (e.g. long-lived tab, or another session logged out) — route
+            // back to the login screen instead of just toasting an error
+            // that reappears on every subsequent poll.
+            handleAuthFailureAndRetry(renderAllWithAuthHandling);
+          } else {
+            showToast("Could not load dashboard data", true);
+          }
+        });
+      }
+      renderAllWithAuthHandling();
 
       window.addEventListener("resize", () => renderAll().catch(() => {}));
     });

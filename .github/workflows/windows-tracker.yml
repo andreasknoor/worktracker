@@ -1,0 +1,30 @@
+name: Windows tracker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "windows-tracker/**"
+      - ".github/workflows/windows-tracker.yml"
+  pull_request:
+    paths:
+      - "windows-tracker/**"
+      - ".github/workflows/windows-tracker.yml"
+
+jobs:
+  dotnet-test:
+    # WorkTrackerTracker.Core is platform-independent .NET; only it (and its
+    # tests) is exercised here. WorkTrackerTracker.App is Windows-only UI
+    # (NotifyIcon, GetLastInputInfo) that can compile via EnableWindowsTargeting
+    # but has never actually run outside a real Windows machine — see
+    # windows-tracker/README.md — so it's intentionally not part of this CI job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: dotnet test (WorkTrackerTracker.Core)
+        run: dotnet test windows-tracker/test/WorkTrackerTracker.Core.Tests/WorkTrackerTracker.Core.Tests.csproj

@@ -110,7 +110,7 @@
         <button class="nav-btn" id="periodNext" aria-label="Next period">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"></path></svg>
         </button>
-        <button class="table-toggle" data-target="weekly">View as table</button>
+        <button class="table-toggle" data-target="weekly" aria-label="View weekly overview as table">View as table</button>
       </div>
     </div>
     <div class="chart-wrap" id="weeklyChartWrap" data-view="chart">
@@ -127,7 +127,7 @@
         <div class="caption" id="trendCaption"></div>
       </div>
       <div class="card-controls">
-        <button class="table-toggle" data-target="trend">View as table</button>
+        <button class="table-toggle" data-target="trend" aria-label="View daily hours trend as table">View as table</button>
       </div>
     </div>
     <div class="chart-wrap" id="trendChartWrap" data-view="chart">
@@ -158,8 +158,8 @@
 </div>
 
 <div class="modal-overlay" id="settingsOverlay">
-  <div class="modal">
-    <h3>Dashboard settings</h3>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" tabindex="-1">
+    <h3 id="settingsTitle">Dashboard settings</h3>
     <p class="modal-sub">Idle threshold and poll interval are configured per device — see the Devices panel.</p>
 
     <div class="field">
@@ -180,8 +180,8 @@
 </div>
 
 <div class="modal-overlay" id="devicesOverlay">
-  <div class="modal">
-    <h3>Devices</h3>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="devicesTitle" tabindex="-1">
+    <h3 id="devicesTitle">Devices</h3>
     <p class="modal-sub">Each device has its own idle threshold and poll interval.</p>
 
     <div id="devicesList" class="devices-list"></div>
@@ -204,8 +204,8 @@
 </div>
 
 <div class="modal-overlay" id="loginOverlay">
-  <div class="modal">
-    <h3>Sign in</h3>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="loginTitle" tabindex="-1">
+    <h3 id="loginTitle">Sign in</h3>
     <p class="modal-sub">This dashboard is password-protected.</p>
 
     <div class="field">
@@ -216,6 +216,17 @@
 
     <div class="modal-actions">
       <button class="btn primary" id="loginSubmit">Sign in</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="connectionErrorOverlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="connectionErrorTitle" tabindex="-1">
+    <h3 id="connectionErrorTitle">Can't reach the server</h3>
+    <p class="modal-sub">The dashboard couldn't connect to WorkTracker. Check your network connection and try again.</p>
+
+    <div class="modal-actions">
+      <button class="btn primary" id="connectionErrorRetry">Retry</button>
     </div>
   </div>
 </div>

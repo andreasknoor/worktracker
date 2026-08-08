@@ -24,6 +24,17 @@ export function dashboardSessionSecret(): string {
   return secret;
 }
 
+/**
+ * True when running as the deployed Vercel Function (Vercel always sets
+ * NODE_ENV=production for both production and preview deployments — both
+ * serve over HTTPS). False for local dev (`npm run dev`, no NODE_ENV set)
+ * and tests, where the session cookie must NOT be marked `Secure` or
+ * browsers silently drop it over plain HTTP, breaking login locally.
+ */
+export function isProduction(): boolean {
+  return process.env.NODE_ENV === "production";
+}
+
 export function databaseUrl(): string {
   const url = process.env.DATABASE_URL;
   if (!url) {

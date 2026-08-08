@@ -30,6 +30,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyConfig(config)
     }
 
+    /// Persistence of queued activity timestamps is debounced (see
+    /// `ActivityQueue`) to avoid rewriting the whole queue file on every
+    /// activity tick. On a graceful quit there's no reason to accept even
+    /// that small window of data loss, so force a final write here.
+    func applicationWillTerminate(_ notification: Notification) {
+        activityQueue?.persistNow()
+    }
+
     private func applyConfig(_ newConfig: TrackerConfig) {
         config = newConfig
         try? ConfigStore.save(config, to: configFileURL)
@@ -52,9 +60,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         idleMonitor?.start()
 
-        // Flush at least as often as we poll, but never more than every 15s,
-        // so the dashboard's live view (polled every 15s) sees fresh data.
-        let flushInterval = max(pollInterval, 15)
+        // Flush at least as often as we poll, but never more than every
+        // minFlushIntervalSeconds, so the dashboard's live view (polled at
+        // the same cadence) sees fresh data.
+        let flushInterval = max(pollInterval, TrackerConstants.minFlushIntervalSeconds)
         let timer = Timer(timeInterval: flushInterval, repeats: true) { [weak self] _ in
             self?.flushQueue()
         }

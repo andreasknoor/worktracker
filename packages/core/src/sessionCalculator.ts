@@ -17,6 +17,13 @@ export function calculateSessions(
   idleThreshold: number,
   resumeConfirmationWindow: number = DEFAULT_RESUME_CONFIRMATION_WINDOW_MS,
 ): WorkSession[] {
+  if (idleThreshold <= 0) {
+    throw new RangeError(`idleThreshold must be > 0, got ${idleThreshold}`);
+  }
+  if (resumeConfirmationWindow <= 0) {
+    throw new RangeError(`resumeConfirmationWindow must be > 0, got ${resumeConfirmationWindow}`);
+  }
+
   if (timestamps.length === 0) {
     return [];
   }

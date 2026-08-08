@@ -78,23 +78,27 @@ Anchors the "All time" range filter.
 
 ## Settings endpoints
 
+**Deviation from the original design** (see `docs/IMPLEMENTATION_NOTES.md`):
+`idleThresholdMinutes`/`pollIntervalSeconds` moved to per-device columns —
+set them via `PATCH /api/devices/{id}` below, not here — and
+`startWithWindows` was dropped entirely (its meaning was ambiguous once
+multiple devices exist; autostart is now a purely local, per-OS tracker
+concern with no server-side representation). Only dashboard-display
+preferences remain global.
+
 ### `GET /api/settings/`
 ```json
 {
-  "idleThresholdMinutes": 30,
-  "pollIntervalSeconds": 30,
-  "startWithWindows": true,
   "coreHoursStart": "09:00",
   "coreHoursEnd": "18:00"
 }
 ```
-Note: `startWithWindows` is carried over from the original single-device shape. In the multi-device model this field's meaning is ambiguous (which device?) — decide during implementation whether to drop it from the global settings response (and remove the corresponding dashboard toggle) or repurpose it as a per-*current-viewing-context* convenience. See `DATA_MODEL.md`'s note on this.
 
 ### `PUT /api/settings/`
-Request body same shape as the `GET` response. Validation (preserve these exact rules):
-- `idleThresholdMinutes > 0` and `pollIntervalSeconds > 0`, else `400`.
+Request body same shape as the `GET` response. Validation:
 - `coreHoursStart`/`coreHoursEnd` must parse as `HH:mm`, else `400`.
 - `coreHoursEnd` must be strictly after `coreHoursStart`, else `400`.
+- A malformed JSON body returns `400` rather than a raw parse error.
 
 Returns the saved settings (same shape as `GET`).
 
@@ -110,6 +114,7 @@ or a small batch (recommended, so a tracker can flush a short local queue after 
 { "timestamps": ["2026-03-11T09:02:15.123Z", "2026-03-11T09:02:45.400Z"] }
 ```
 - `401` if the API key is missing/invalid/revoked.
+- `400` if the batch exceeds 5000 timestamps in one request, or if none of the provided timestamps parse.
 - Server resolves the key to a `device_id`, inserts one row per timestamp into `activity_events`, and updates that device's `last_seen_at`.
 - `200`/`201` with an empty or minimal ack body — trackers don't need a rich response.
 
@@ -118,19 +123,30 @@ or a small batch (recommended, so a tracker can flush a short local queue after 
 ### `GET /api/devices`
 ```json
 [
-  { "id": "...", "name": "Work Laptop (Windows)", "platform": "windows", "lastSeenAt": "2026-03-11T09:02:45Z", "revoked": false },
+  {
+    "id": "...",
+    "name": "Work Laptop (Windows)",
+    "platform": "windows",
+    "idleThresholdMinutes": 30,
+    "pollIntervalSeconds": 30,
+    "lastSeenAt": "2026-03-11T09:02:45Z",
+    "revoked": false
+  },
   ...
 ]
 ```
 
 ### `POST /api/devices`
-Request: `{ "name": "...", "platform": "windows" | "mac" }`. Response includes the **raw** API key exactly once (never retrievable again, same convention as GitHub/Stripe-style tokens):
+Request: `{ "name": "...", "platform": "windows" | "mac" }`. `name` is trimmed and must be 1-100 characters after trimming, else `400`. Response includes the **raw** API key exactly once (never retrievable again, same convention as GitHub/Stripe-style tokens):
 ```json
 { "id": "...", "name": "...", "platform": "windows", "apiKey": "wtk_live_..." }
 ```
 
+### `PATCH /api/devices/{id}`
+Request: `{ "idleThresholdMinutes"?: number, "pollIntervalSeconds"?: number }` (either or both). Each, if present, must be `> 0`, else `400`. `404` if the id isn't a valid uuid or doesn't match a device. Returns the updated device (same shape as one `GET /api/devices` entry, minus `apiKey`).
+
 ### `DELETE /api/devices/{id}`
-Revokes the device's key (soft-revoke — see `DATA_MODEL.md`). `204` on success.
+Revokes the device's key (soft-revoke — see `DATA_MODEL.md`). `204` on success, `404` if the id isn't a valid uuid or doesn't match a device.
 
 ## Per-device filtering
 
@@ -143,3 +159,14 @@ An unknown or malformed id returns `404` rather than silently empty data. See
 
 - Dashboard auth: hand-rolled password + signed session cookie gate. See
   `docs/IMPLEMENTATION_NOTES.md` D3.
+- `POST /api/auth/login` is rate-limited: 5 failed attempts per client
+  (keyed by `X-Forwarded-For`) within a 15-minute window returns `429`
+  until the window resets. Best-effort/in-memory (resets on a cold start),
+  not a distributed rate limiter — sufficient for a single-user tool.
+  The session cookie is only marked `Secure` when `NODE_ENV=production`
+  (Vercel sets this on every deployment); local dev over plain HTTP needs
+  it unset or the browser silently drops the cookie.
+- Unhandled route errors (and malformed JSON bodies on `PUT
+  /api/settings/`, `POST /api/devices`, `POST /api/events`) return a
+  generic `{ "error": "..." }` JSON response instead of throwing, so no
+  route can 500 with an unstructured body.

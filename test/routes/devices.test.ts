@@ -196,6 +196,85 @@ describe("Device management", () => {
     const deleteResponse = await authed(ctx, "/api/devices/not-a-uuid", { method: "DELETE" });
     expect(deleteResponse.status).toBe(404);
   });
+
+  it("rejects an empty or whitespace-only device name", async () => {
+    const empty = await authed(ctx, "/api/devices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "   ", platform: "mac" }),
+    });
+    expect(empty.status).toBe(400);
+  });
+
+  it("rejects a device name longer than the allowed maximum", async () => {
+    const response = await authed(ctx, "/api/devices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "x".repeat(101), platform: "mac" }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("trims surrounding whitespace from a device name", async () => {
+    const response = await authed(ctx, "/api/devices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "  Work Laptop  ", platform: "mac" }),
+    });
+    const body = await response.json();
+    expect(body.name).toBe("Work Laptop");
+  });
+
+  it("returns 400 instead of throwing on malformed JSON when creating a device", async () => {
+    const response = await authed(ctx, "/api/devices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{not json",
+    });
+    expect(response.status).toBe(400);
+  });
+});
+
+describe("Login rate limiting", () => {
+  it("locks out further attempts after too many wrong passwords", async () => {
+    const devices = new InMemoryDevicesRepository();
+    const events = new InMemoryActivityEventsRepository();
+    const settings = new InMemorySettingsRepository();
+    const app = createApp({ devices, events, settings });
+
+    let lastResponse: Response | undefined;
+    for (let i = 0; i < 6; i += 1) {
+      lastResponse = await app.request("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: "wrong" }),
+      });
+    }
+
+    expect(lastResponse!.status).toBe(429);
+  });
+
+  it("still allows the correct password before the lockout threshold is hit", async () => {
+    const devices = new InMemoryDevicesRepository();
+    const events = new InMemoryActivityEventsRepository();
+    const settings = new InMemorySettingsRepository();
+    const app = createApp({ devices, events, settings });
+
+    for (let i = 0; i < 3; i += 1) {
+      await app.request("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: "wrong" }),
+      });
+    }
+
+    const response = await app.request("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: "test-password" }),
+    });
+    expect(response.status).toBe(200);
+  });
 });
 
 describe("Event ingestion", () => {
@@ -271,6 +350,26 @@ describe("Event ingestion", () => {
     });
     expect(response.status).toBe(401);
   });
+
+  it("rejects a batch exceeding the per-request timestamp cap", async () => {
+    const now = Date.now();
+    const timestamps = Array.from({ length: 5001 }, (_, i) => new Date(now + i).toISOString());
+    const response = await ctx.app.request("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ timestamps }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("returns 400 instead of throwing on malformed JSON", async () => {
+    const response = await ctx.app.request("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: "{not json",
+    });
+    expect(response.status).toBe(400);
+  });
 });
 
 describe("Settings validation", () => {
@@ -310,6 +409,15 @@ describe("Settings validation", () => {
     const settings = await getResponse.json();
     expect(settings.coreHoursStart).toBe("08:30");
     expect(settings.coreHoursEnd).toBe("16:45");
+  });
+
+  it("returns 400 instead of throwing on malformed JSON", async () => {
+    const response = await authed(ctx, "/api/settings/", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: "{not json",
+    });
+    expect(response.status).toBe(400);
   });
 });
 

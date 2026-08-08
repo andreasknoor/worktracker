@@ -240,6 +240,54 @@ describe("StatsEndpointsTests", () => {
   });
 });
 
+describe("stats query param validation", () => {
+  let ctx: TestContext;
+
+  beforeEach(async () => {
+    ctx = await setUp();
+  });
+
+  it("rejects a malformed start date on /api/stats/week", async () => {
+    const response = await authedGet(ctx, "/api/stats/week?start=not-a-date");
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a missing start date on /api/stats/week", async () => {
+    const response = await authedGet(ctx, "/api/stats/week");
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a calendar-invalid start date on /api/stats/week-timeline", async () => {
+    const response = await authedGet(ctx, "/api/stats/week-timeline?start=2026-02-30");
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a malformed month on /api/stats/month", async () => {
+    const response = await authedGet(ctx, "/api/stats/month?month=2026-13");
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a non-numeric days param on /api/stats/summary", async () => {
+    const response = await authedGet(ctx, "/api/stats/summary?days=abc");
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a negative days param on /api/stats/summary", async () => {
+    const response = await authedGet(ctx, "/api/stats/summary?days=-5");
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects an out-of-bounds days param on /api/stats/sessions", async () => {
+    const response = await authedGet(ctx, "/api/stats/sessions?days=999999999");
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a malformed end param on /api/stats/summary", async () => {
+    const response = await authedGet(ctx, "/api/stats/summary?days=7&end=not-a-date");
+    expect(response.status).toBe(400);
+  });
+});
+
 describe("dashboard auth gate", () => {
   it("rejects stats requests without a valid session cookie", async () => {
     const devices = new InMemoryDevicesRepository();
@@ -263,5 +311,22 @@ describe("dashboard auth gate", () => {
       body: JSON.stringify({ password: "wrong" }),
     });
     expect(response.status).toBe(401);
+  });
+
+  it("does not mark the session cookie Secure outside of production (NODE_ENV !== 'production')", async () => {
+    const devices = new InMemoryDevicesRepository();
+    const events = new InMemoryActivityEventsRepository();
+    const settings = new InMemorySettingsRepository();
+    const app = createApp({ devices, events, settings });
+
+    expect(process.env.NODE_ENV).not.toBe("production");
+
+    const response = await app.request("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: "test-password" }),
+    });
+    const setCookieHeader = response.headers.get("set-cookie")!;
+    expect(setCookieHeader).not.toMatch(/Secure/i);
   });
 });

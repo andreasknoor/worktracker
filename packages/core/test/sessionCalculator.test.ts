@@ -255,4 +255,14 @@ describe("mergeSessions", () => {
     expect(merged[0]!.start).toBe(EPOCH);
     expect(merged[0]!.end).toBe(EPOCH + 20 * MINUTE);
   });
+
+  it("rejects a non-positive idleThreshold", () => {
+    expect(() => calculateSessions([EPOCH, EPOCH + MINUTE], 0)).toThrow(RangeError);
+    expect(() => calculateSessions([EPOCH, EPOCH + MINUTE], -MINUTE)).toThrow(RangeError);
+  });
+
+  it("rejects a non-positive resumeConfirmationWindow", () => {
+    expect(() => calculateSessions([EPOCH, EPOCH + MINUTE], 30 * MINUTE, 0)).toThrow(RangeError);
+    expect(() => calculateSessions([EPOCH, EPOCH + MINUTE], 30 * MINUTE, -SECOND)).toThrow(RangeError);
+  });
 });

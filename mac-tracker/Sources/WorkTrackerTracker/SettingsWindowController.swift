@@ -130,7 +130,7 @@ final class SettingsWindowController: NSWindowController {
         let updated = TrackerConfig(
             serverBaseURL: serverTextView.string.trimmingCharacters(in: .whitespacesAndNewlines),
             apiKey: apiKeyTextView.string.trimmingCharacters(in: .whitespacesAndNewlines),
-            pollIntervalSeconds: max(5, pollInterval)
+            pollIntervalSeconds: max(TrackerConstants.minPollIntervalSeconds, pollInterval)
         )
         onSave(updated)
         window?.orderOut(nil)
