@@ -31,7 +31,7 @@
     --text-muted:     #898781;
     --gridline:       #2c2c2a;
     --baseline:       #383835;
-    --border:         rgba(255,255,255,0.22);
+    --border:         rgba(255,255,255,0.32);
     --series-1:       #3987e5;
     --series-1-100:   #16324f;
     --series-2:       #d95926;
@@ -50,7 +50,7 @@
   --text-muted:     #898781;
   --gridline:       #2c2c2a;
   --baseline:       #383835;
-  --border:         rgba(255,255,255,0.22);
+  --border:         rgba(255,255,255,0.32);
   --series-1:       #3987e5;
   --series-1-100:   #16324f;
   --series-2:       #d95926;
@@ -126,31 +126,36 @@ header.app-header .subtitle {
 }
 .live-ring-wrap {
   position: relative;
-  width: 148px;
-  height: 148px;
+  width: 180px;
+  height: 180px;
   flex: none;
 }
 .live-ring {
-  width: 148px;
-  height: 148px;
+  width: 180px;
+  height: 180px;
   transform: rotate(-90deg);
+}
+.live-ring-frame {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1.5;
 }
 .live-ring-track {
   fill: none;
   stroke: var(--series-1-100);
-  stroke-width: 11;
+  stroke-width: 15;
 }
 .live-ring-progress {
   fill: none;
   stroke: var(--series-1);
-  stroke-width: 11;
+  stroke-width: 15;
   stroke-linecap: round;
   transition: stroke-dashoffset 0.3s ease, stroke 0.25s ease;
 }
 .live-ring-bar[data-active="false"] .live-ring-progress { stroke: var(--baseline); }
 .live-ring-center {
   position: absolute;
-  inset: 0;
+  inset: 20px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -175,8 +180,8 @@ header.app-header .subtitle {
   margin-bottom: 6px;
 }
 .live-ring-session-value {
-  font-size: 34px;
-  font-weight: 650;
+  font-size: 20px;
+  font-weight: 600;
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
@@ -300,6 +305,18 @@ header.app-header .subtitle {
 .segmented-disabled { opacity: 0.4; }
 .segmented-disabled .segmented-btn { cursor: default; }
 .segmented-disabled .segmented-btn:hover { background: transparent; }
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.checkbox-label input[type="checkbox"] { cursor: pointer; }
 
 .nav-btn {
   width: 28px; height: 28px;

@@ -53,6 +53,7 @@
   /* ---------- State ---------- */
 
   const DEVICE_STORAGE_KEY = "wtk_selected_device";
+  const CORE_HOURS_ONLY_STORAGE_KEY = "wtk_timeline_core_hours_only";
 
   const state = {
     rangeDays: 7,        // used for stat tiles / trend / sessions; "all" resolves to a day count once first-activity is known
@@ -65,6 +66,7 @@
     coreHoursStartMinutes: 9 * 60,  // refreshed from settings; used by the timeline chart
     coreHoursEndMinutes: 18 * 60,
     selectedDeviceId: localStorage.getItem(DEVICE_STORAGE_KEY) || "", // "" = all devices combined
+    timelineCoreHoursOnly: localStorage.getItem(CORE_HOURS_ONLY_STORAGE_KEY) === "1", // crop the timeline y-axis to core hours ± 1h
   };
 
   function setSelectedDeviceId(deviceId) {
@@ -291,6 +293,7 @@
     const showTimeline = !isMonth && state.displayMode === "timeline";
     totalsSvg.style.display = showTimeline ? "none" : "";
     timelineSvg.style.display = showTimeline ? "" : "none";
+    document.getElementById("coreHoursOnlyLabel").style.display = showTimeline ? "" : "none";
 
     if (showTimeline) {
       await renderTimelineChart();
@@ -452,7 +455,15 @@
     const slotW = plotW / 7;
     const trackW = Math.min(48, slotW * 0.55);
 
-    function yForMinute(minute) { return padT + (minute / 1440) * plotH; }
+    // "Core hours only" crops the y-axis to [coreHoursStart - 1h, coreHoursEnd + 1h]
+    // instead of the full day, clamped to the day's own [0, 24h] bounds. Activity
+    // outside that window is simply not drawn (clipped below), not auto-expanded —
+    // this is a zoom into the usual work window, not a data filter.
+    const rangeStart = state.timelineCoreHoursOnly ? Math.max(0, state.coreHoursStartMinutes - 60) : 0;
+    const rangeEnd = state.timelineCoreHoursOnly ? Math.min(1440, state.coreHoursEndMinutes + 60) : 1440;
+    const rangeSpan = Math.max(1, rangeEnd - rangeStart);
+
+    function yForMinute(minute) { return padT + ((minute - rangeStart) / rangeSpan) * plotH; }
 
     const svg = document.getElementById("timelineSvg");
     const parts = [];
@@ -466,9 +477,14 @@
       parts.push('<text class="timeline-core-hours-label" x="' + (W - padR) + '" y="' + (coreY + 11).toFixed(1) + '" text-anchor="end">Core hours</text>');
     }
 
-    // Hour reference lines every 4 hours (0, 4, 8, ... 24), recessive like the bar charts' gridlines.
-    for (let hour = 0; hour <= 24; hour += 4) {
-      const y = yForMinute(hour * 60);
+    // Hour reference lines, recessive like the bar charts' gridlines. Step adapts
+    // to how much of the day is visible, so a cropped (core-hours-only) range
+    // still gets a handful of gridlines instead of just one or two.
+    const hourStep = rangeSpan <= 6 * 60 ? 1 : rangeSpan <= 14 * 60 ? 2 : 4;
+    for (let hour = 0; hour <= 24; hour += hourStep) {
+      const minute = hour * 60;
+      if (minute < rangeStart || minute > rangeEnd) continue;
+      const y = yForMinute(minute);
       parts.push('<line class="timeline-hour-line" x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + y.toFixed(1) + '"></line>');
       parts.push('<text class="axis-label" x="' + (padL - 8) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end">' + String(hour).padStart(2, "0") + '</text>');
     }
@@ -478,13 +494,19 @@
       const x = cx - trackW / 2;
       const todayFlag = startOfDay(d.date).getTime() === today.getTime();
 
-      // The full 24h track (idle time), with work segments layered on top.
+      // The visible-range track (idle time), with work segments layered on top.
       const trackR = Math.min(6, trackW / 2);
       parts.push('<rect class="timeline-track" x="' + x.toFixed(1) + '" y="' + padT + '" width="' + trackW.toFixed(1) + '" height="' + plotH.toFixed(1) + '" rx="' + trackR + '"></rect>');
 
       d.segments.forEach((seg, segIdx) => {
-        const segY = yForMinute(seg.startMinutes);
-        const segH = yForMinute(seg.endMinutes) - segY;
+        // Clip to the visible range rather than the segment's own true extent —
+        // segments (partially) outside a cropped "core hours only" window are
+        // shortened or skipped, but the tooltip below still reports true times.
+        const visStart = Math.max(seg.startMinutes, rangeStart);
+        const visEnd = Math.min(seg.endMinutes, rangeEnd);
+        if (visEnd <= visStart) return;
+        const segY = yForMinute(visStart);
+        const segH = yForMinute(visEnd) - segY;
         if (segH <= 0) return;
         parts.push(
           '<rect class="timeline-segment" data-day-idx="' + i + '" data-seg-idx="' + segIdx + '" x="' + x.toFixed(1) +
@@ -715,6 +737,14 @@
       state.displayMode = btn.getAttribute("data-display");
       renderWeeklyChart();
     });
+  });
+
+  const coreHoursOnlyToggle = document.getElementById("coreHoursOnlyToggle");
+  coreHoursOnlyToggle.checked = state.timelineCoreHoursOnly;
+  coreHoursOnlyToggle.addEventListener("change", () => {
+    state.timelineCoreHoursOnly = coreHoursOnlyToggle.checked;
+    localStorage.setItem(CORE_HOURS_ONLY_STORAGE_KEY, state.timelineCoreHoursOnly ? "1" : "0");
+    renderWeeklyChart();
   });
 
   /* ---------- Wiring: table view toggles ---------- */
@@ -1005,7 +1035,7 @@
   }
 
   const DAILY_GOAL_SECONDS = 8 * 3600;
-  const RING_CIRCUMFERENCE = 2 * Math.PI * 62;
+  const RING_CIRCUMFERENCE = 2 * Math.PI * 78;
 
   const liveBar = document.getElementById("liveBar");
   const liveRingProgress = document.getElementById("liveRingProgress");

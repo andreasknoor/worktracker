@@ -38,9 +38,11 @@
 
   <div class="live-ring-bar" id="liveBar" data-active="false">
     <div class="live-ring-wrap">
-      <svg class="live-ring" viewBox="0 0 148 148">
-        <circle class="live-ring-track" cx="74" cy="74" r="62"></circle>
-        <circle class="live-ring-progress" id="liveRingProgress" cx="74" cy="74" r="62" stroke-dasharray="389.6" stroke-dashoffset="389.6"></circle>
+      <svg class="live-ring" viewBox="0 0 180 180">
+        <circle class="live-ring-frame" cx="90" cy="90" r="69.75"></circle>
+        <circle class="live-ring-track" cx="90" cy="90" r="78"></circle>
+        <circle class="live-ring-progress" id="liveRingProgress" cx="90" cy="90" r="78" stroke-dasharray="490.1" stroke-dashoffset="490.1"></circle>
+        <circle class="live-ring-frame" cx="90" cy="90" r="86.25"></circle>
       </svg>
       <div class="live-ring-center">
         <div class="live-ring-today" id="liveTodayValue">00:00:00</div>
@@ -93,6 +95,10 @@
           <button class="segmented-btn" data-display="totals" aria-pressed="true">Totals</button>
           <button class="segmented-btn" data-display="timeline" aria-pressed="false">Timeline</button>
         </div>
+        <label class="checkbox-label" id="coreHoursOnlyLabel" style="display:none;">
+          <input type="checkbox" id="coreHoursOnlyToggle">
+          Core hours only
+        </label>
         <div class="segmented" role="group" aria-label="Period view">
           <button class="segmented-btn" data-period="week" aria-pressed="true">Week</button>
           <button class="segmented-btn" data-period="month" aria-pressed="false">Month</button>
