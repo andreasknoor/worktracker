@@ -119,6 +119,20 @@ swift test    # requires the full Xcode toolchain's XCTest.framework; if
 - Sessions spanning midnight in `/api/stats/sessions` are split into one row
   per day touched (reusing the timeline chart's `dailySegments` clipping
   logic); a session ending exactly at midnight formats as `"24:00"`.
+- **Two independent filter/coloring dimensions on top of the merged
+  timeline**, both in `src/server/services/sessionsService.ts` +
+  `packages/core`: **device identity** (`getAttributedSessionsInRange` /
+  `mergeSessionsWithDeviceIds`, dimension 1 — colors the Timeline chart per
+  device, sliced at the exact instant the active device set changes, not the
+  whole span a session happened to touch) and **work/leisure classification**
+  (`getClassifiedSessionsInRange` / `classifyDay`, dimension 2 — each
+  device's `trackingMode` column, default `"auto"`, overrides the
+  weekday=work/weekend=leisure default per device). They're deliberately kept
+  orthogonal rather than merged into one color channel — see
+  `docs/API_CONTRACT.md`'s "Device attribution" section for why. Classifying
+  happens *before* merging (`splitByDay` then `classifyDay` per device, per
+  calendar day) since a device left on `auto` can contribute both work and
+  leisure time within the same query range.
 
 ## Versioning
 

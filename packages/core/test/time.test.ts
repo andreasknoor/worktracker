@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   addDays,
+  classifyDay,
   dateKeyInZone,
   daysBetween,
   formatHHmm,
@@ -92,6 +93,24 @@ describe("time helpers", () => {
     it("returns true for Saturday and Sunday", () => {
       expect(isWeekend("2026-01-10")).toBe(true); // Saturday
       expect(isWeekend("2026-01-11")).toBe(true); // Sunday
+    });
+  });
+
+  describe("classifyDay", () => {
+    it("auto: classifies a weekday as work", () => {
+      expect(classifyDay("2026-01-05", "auto")).toBe("work"); // Monday
+    });
+
+    it("auto: classifies a weekend day as leisure", () => {
+      expect(classifyDay("2026-01-10", "auto")).toBe("leisure"); // Saturday
+    });
+
+    it("alwaysWork: classifies a weekend day as work too", () => {
+      expect(classifyDay("2026-01-10", "alwaysWork")).toBe("work"); // Saturday
+    });
+
+    it("alwaysLeisure: classifies a weekday as leisure too", () => {
+      expect(classifyDay("2026-01-05", "alwaysLeisure")).toBe("leisure"); // Monday
     });
   });
 

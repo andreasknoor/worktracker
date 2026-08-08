@@ -106,3 +106,55 @@ export function mergeSessions(sessionLists: readonly (readonly WorkSession[])[])
 
   return merged;
 }
+
+/**
+ * Unions overlapping sessions across devices like `mergeSessions`, but keeps
+ * track of which device(s) were active in each resulting interval instead of
+ * discarding that. Unlike `mergeSessions`'s coarse union, this slices at
+ * every point the active device set changes — two devices overlapping for
+ * only part of their sessions yields three intervals (solo, both, solo), not
+ * one interval spanning the whole thing — so the neutral "multiple devices"
+ * color only ever covers time that was genuinely simultaneous. The measure
+ * (total duration) of the result always equals `mergeSessions`'s.
+ */
+export function mergeSessionsWithDeviceIds(
+  sessionsByDevice: ReadonlyMap<string, readonly WorkSession[]>,
+): (WorkSession & { deviceIds: string[] })[] {
+  const allSessions: (WorkSession & { deviceId: string })[] = [];
+  for (const [deviceId, sessions] of sessionsByDevice) {
+    for (const s of sessions) {
+      if (s.end > s.start) allSessions.push({ start: s.start, end: s.end, deviceId });
+    }
+  }
+  if (allSessions.length === 0) {
+    return [];
+  }
+
+  // Every session boundary is a potential point where the active device set
+  // changes; between two consecutive boundaries, that set is constant.
+  const boundaries = [...new Set(allSessions.flatMap((s) => [s.start, s.end]))].sort((a, b) => a - b);
+
+  const result: (WorkSession & { deviceIds: string[] })[] = [];
+  for (let i = 0; i < boundaries.length - 1; i += 1) {
+    const segStart = boundaries[i]!;
+    const segEnd = boundaries[i + 1]!;
+    const deviceIds = [
+      ...new Set(allSessions.filter((s) => s.start <= segStart && s.end >= segEnd).map((s) => s.deviceId)),
+    ].sort();
+
+    if (deviceIds.length === 0) continue; // a gap between sessions, not part of any interval
+
+    const last = result[result.length - 1];
+    if (last && last.end === segStart && arraysEqual(last.deviceIds, deviceIds)) {
+      last.end = segEnd; // extend: same active device set, zero gap
+    } else {
+      result.push({ start: segStart, end: segEnd, deviceIds });
+    }
+  }
+
+  return result;
+}
+
+function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}

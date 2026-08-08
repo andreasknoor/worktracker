@@ -4,6 +4,12 @@
 -- and pollInterval moved from the global `settings` table to per-device
 -- columns on `devices`, so each tracker installation can be tuned
 -- independently. See docs/IMPLEMENTATION_NOTES.md.
+--
+-- This file is only applied in full to a fresh database (`npm run
+-- db:apply-schema`, a plain `CREATE TABLE` with no `IF NOT EXISTS`). An
+-- already-provisioned database needs the corresponding ALTER statement
+-- instead — see `scripts/migrations/` for one-off scripts that were actually
+-- run against the real (Neon) database, in the order they were added.
 
 CREATE TABLE devices (
   id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -12,6 +18,12 @@ CREATE TABLE devices (
   api_key_hash            text NOT NULL,
   idle_threshold_minutes  integer NOT NULL DEFAULT 30 CHECK (idle_threshold_minutes > 0),
   poll_interval_seconds   integer NOT NULL DEFAULT 30 CHECK (poll_interval_seconds > 0),
+  -- Work/leisure classification override for this device's logged time.
+  -- 'auto' derives it from the calendar (weekday = work, weekend = leisure);
+  -- 'alwaysWork'/'alwaysLeisure' pin it regardless of day, e.g. a company PC
+  -- that should count as work even on a weekend. See classifyDay() in
+  -- packages/core/src/time.ts.
+  tracking_mode           text NOT NULL DEFAULT 'auto' CHECK (tracking_mode IN ('auto', 'alwaysWork', 'alwaysLeisure')),
   created_at              timestamptz NOT NULL DEFAULT now(),
   last_seen_at            timestamptz,
   revoked_at              timestamptz

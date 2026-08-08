@@ -17,7 +17,7 @@ All dates are `"yyyy-MM-dd"` strings; all times within a day are `"HH:mm"` 24h s
 ```
 
 ### `GET /api/stats/week-timeline?start=yyyy-MM-dd`
-Same week window, but per-day clock-time segments instead of totals (for the "Timeline" chart mode).
+Same week window, but per-day clock-time segments instead of totals (for the "Timeline" chart mode). Each segment additionally carries `deviceIds`: the device(s) active during that exact sub-slice — one id if only one device was active, two or more if they overlapped (used to color the aggregated Timeline chart per device, with a neutral color for the multi-device case; see "Device attribution" below).
 ```json
 {
   "weekStart": "2026-03-09",
@@ -25,7 +25,11 @@ Same week window, but per-day clock-time segments instead of totals (for the "Ti
   "days": [
     {
       "date": "2026-03-09",
-      "segments": [{ "startMinutes": 540, "endMinutes": 720 }, { "startMinutes": 780, "endMinutes": 1020 }]
+      "segments": [
+        { "startMinutes": 540, "endMinutes": 690, "deviceIds": ["a1b2..."] },
+        { "startMinutes": 690, "endMinutes": 720, "deviceIds": ["a1b2...", "c3d4..."] },
+        { "startMinutes": 780, "endMinutes": 1020, "deviceIds": ["c3d4..."] }
+      ]
     },
     ...
   ]
@@ -129,21 +133,23 @@ or a small batch (recommended, so a tracker can flush a short local queue after 
     "platform": "windows",
     "idleThresholdMinutes": 30,
     "pollIntervalSeconds": 30,
+    "trackingMode": "auto",
     "lastSeenAt": "2026-03-11T09:02:45Z",
     "revoked": false
   },
   ...
 ]
 ```
+List order is creation order (`created_at ASC`) — used by the dashboard to assign each device a stable color slot for the Timeline chart, so a device's color doesn't reshuffle when another device is added or revoked.
 
 ### `POST /api/devices`
-Request: `{ "name": "...", "platform": "windows" | "mac" }`. `name` is trimmed and must be 1-100 characters after trimming, else `400`. Response includes the **raw** API key exactly once (never retrievable again, same convention as GitHub/Stripe-style tokens):
+Request: `{ "name": "...", "platform": "windows" | "mac" }`. `name` is trimmed and must be 1-100 characters after trimming, else `400`. New devices always start with `trackingMode: "auto"` (change it afterwards via `PATCH`). Response includes the **raw** API key exactly once (never retrievable again, same convention as GitHub/Stripe-style tokens):
 ```json
 { "id": "...", "name": "...", "platform": "windows", "apiKey": "wtk_live_..." }
 ```
 
 ### `PATCH /api/devices/{id}`
-Request: `{ "idleThresholdMinutes"?: number, "pollIntervalSeconds"?: number }` (either or both). Each, if present, must be `> 0`, else `400`. `404` if the id isn't a valid uuid or doesn't match a device. Returns the updated device (same shape as one `GET /api/devices` entry, minus `apiKey`).
+Request: `{ "idleThresholdMinutes"?: number, "pollIntervalSeconds"?: number, "trackingMode"?: "auto" | "alwaysWork" | "alwaysLeisure" }` (any subset). `idleThresholdMinutes`/`pollIntervalSeconds`, if present, must be `> 0`; `trackingMode`, if present, must be one of the three listed values — else `400`. `404` if the id isn't a valid uuid or doesn't match a device. Returns the updated device (same shape as one `GET /api/devices` entry, minus `apiKey`).
 
 ### `DELETE /api/devices/{id}`
 Revokes the device's key (soft-revoke — see `DATA_MODEL.md`). `204` on success, `404` if the id isn't a valid uuid or doesn't match a device.
@@ -167,6 +173,47 @@ shrinking the array, so callers can keep rendering a full calendar grid.
 `summary`'s `longestSessionMinutes` is scoped to sessions whose *start* falls
 on a matching day. `live` and `first-activity` don't accept this param — a
 "day type" filter doesn't apply to "right now" or to an anchor date.
+
+## Work/leisure filtering
+
+A second, independent filter dimension from day-type above: `GET
+/api/stats/week`, `/week-timeline`, `/month`, `/summary`, and `/sessions`
+additionally accept `?workType=work|leisure|all` (default `all`; `400` on an
+unrecognized value). `dayType` and `workType` can be combined — they're
+applied independently, not as alternatives.
+
+Classification is per device, per calendar day, via each device's
+`trackingMode` (see the devices section above), *not* a raw weekday/weekend
+check on the query range as a whole:
+- `auto` (the default): weekday → work, weekend → leisure.
+- `alwaysWork` / `alwaysLeisure`: pins that device's time regardless of day —
+  e.g. a company PC whose weekend activity should still count as work.
+
+Because classification is per device, a single calendar day can contain both
+work and leisure time (one device pinned to always-work, another left on
+auto, both active on the same Saturday). Sessions from two devices in the
+*same* bucket are deduplicated via the normal cross-device overlap-merge;
+overlapping time from a work-classified device and a leisure-classified
+device is **not** merged with each other and counts in full toward both
+totals — they're different categories, not a double-count of the same
+activity. `summary`'s `longestSessionMinutes` is scoped to sessions whose
+*start* falls in the filtered classification. `live` and `first-activity`
+don't accept this param, same rationale as `dayType`.
+
+## Device attribution (Timeline chart, dimension 1)
+
+`GET /api/stats/week-timeline`'s `deviceIds` field (see above) lets the
+dashboard color the aggregated Timeline chart per device, with a neutral
+color wherever `deviceIds.length >= 2` (devices genuinely active at the same
+instant — sliced at the exact overlap boundary, not the whole span each
+session happened to touch). This is independent of `workType`: it's an
+identity axis (whose activity is this), not a classification axis (what kind
+of time is this) — mixing the two into one color channel was considered and
+deliberately rejected, since a device left on `auto` would need its color to
+mean two different things at once. If `?workType=` is also passed, the
+attributed sessions are computed *within* that classification bucket first,
+so the Timeline chart's device colors reflect only the currently filtered
+work/leisure slice.
 
 ## Resolved during implementation
 

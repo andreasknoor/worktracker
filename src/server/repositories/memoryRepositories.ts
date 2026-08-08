@@ -21,6 +21,7 @@ export class InMemoryDevicesRepository implements DevicesRepository {
       apiKeyHash: device.apiKeyHash,
       idleThresholdMinutes: 30,
       pollIntervalSeconds: 30,
+      trackingMode: "auto",
       createdAt: Date.now(),
       lastSeenAt: null,
       revokedAt: null,
@@ -51,6 +52,7 @@ export class InMemoryDevicesRepository implements DevicesRepository {
       ...device,
       idleThresholdMinutes: update.idleThresholdMinutes ?? device.idleThresholdMinutes,
       pollIntervalSeconds: update.pollIntervalSeconds ?? device.pollIntervalSeconds,
+      trackingMode: update.trackingMode ?? device.trackingMode,
     };
     this.devices.set(id, updated);
     return updated;

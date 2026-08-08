@@ -87,6 +87,14 @@
     </div>
   </div>
 
+  <div class="filter-row" role="group" aria-label="Work type">
+    <div class="segmented" role="group" aria-label="Work type" id="workTypeGroup">
+      <button class="segmented-btn" data-work-type="all" aria-pressed="true">All</button>
+      <button class="segmented-btn" data-work-type="work" aria-pressed="false">Work time</button>
+      <button class="segmented-btn" data-work-type="leisure" aria-pressed="false">Leisure time</button>
+    </div>
+  </div>
+
   <div class="stat-grid" id="statGrid"></div>
 
   <div class="card">
@@ -118,6 +126,7 @@
         <button class="table-toggle" data-target="weekly" aria-label="View weekly overview as table">View as table</button>
       </div>
     </div>
+    <div class="legend" id="timelineLegend" style="display:none"></div>
     <div class="chart-wrap" id="weeklyChartWrap" data-view="chart">
       <svg class="chart-svg" id="weeklySvg" viewBox="0 0 1040 260" preserveAspectRatio="xMidYMid meet"></svg>
       <svg class="chart-svg" id="timelineSvg" viewBox="0 0 1040 320" preserveAspectRatio="xMidYMid meet" style="display:none"></svg>

@@ -235,6 +235,89 @@ describe("Device management", () => {
   });
 });
 
+describe("Device tracking mode (?workType= classification override)", () => {
+  let ctx: TestContext;
+
+  beforeEach(async () => {
+    ctx = await setUp();
+  });
+
+  it("defaults new devices to 'auto'", async () => {
+    const response = await authed(ctx, "/api/devices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Laptop", platform: "mac" }),
+    });
+    const created = await response.json();
+    expect(created.trackingMode).toBeUndefined(); // not part of the creation response, only settings-list
+
+    const list = await (await authed(ctx, "/api/devices")).json();
+    expect(list[0].trackingMode).toBe("auto");
+  });
+
+  it("sets and persists a device's tracking mode via PATCH", async () => {
+    const created = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Company PC", platform: "windows" }),
+      })
+    ).json();
+
+    const patchResponse = await authed(ctx, `/api/devices/${created.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trackingMode: "alwaysWork" }),
+    });
+    expect(patchResponse.status).toBe(200);
+    const patched = await patchResponse.json();
+    expect(patched.trackingMode).toBe("alwaysWork");
+
+    const list = await (await authed(ctx, "/api/devices")).json();
+    expect(list.find((d: { id: string }) => d.id === created.id).trackingMode).toBe("alwaysWork");
+  });
+
+  it("rejects an unrecognized tracking mode", async () => {
+    const created = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Laptop", platform: "mac" }),
+      })
+    ).json();
+
+    const response = await authed(ctx, `/api/devices/${created.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trackingMode: "sometimes" }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("leaves tracking mode unchanged when a PATCH only touches idleThresholdMinutes", async () => {
+    const created = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Laptop", platform: "mac" }),
+      })
+    ).json();
+    await authed(ctx, `/api/devices/${created.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trackingMode: "alwaysLeisure" }),
+    });
+
+    const response = await authed(ctx, `/api/devices/${created.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idleThresholdMinutes: 15 }),
+    });
+    const updated = await response.json();
+    expect(updated.trackingMode).toBe("alwaysLeisure");
+  });
+});
+
 describe("Login rate limiting", () => {
   it("locks out further attempts after too many wrong passwords", async () => {
     const devices = new InMemoryDevicesRepository();
@@ -468,6 +551,204 @@ describe("Multi-device overlap handling", () => {
     // 1 hour of overlapping activity from two devices must read as 1 hour, not 2.
     expect(summary.totalHours).toBeGreaterThanOrEqual(0.95);
     expect(summary.totalHours).toBeLessThanOrEqual(1.05);
+  });
+});
+
+describe("Work/leisure classification (?workType=work|leisure|all)", () => {
+  // 2026-03-09 is a Monday (weekday); 2026-03-14 is a Saturday (weekend).
+  const monday = Date.UTC(2026, 2, 9);
+  const saturday = Date.UTC(2026, 2, 14);
+
+  async function setUpTwoClassifiedDevices() {
+    const ctx = await setUp();
+
+    const companyPc = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Company PC", platform: "windows" }),
+      })
+    ).json();
+    await authed(ctx, `/api/devices/${companyPc.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trackingMode: "alwaysWork" }),
+    });
+
+    const personalLaptop = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Personal Laptop", platform: "mac" }),
+      })
+    ).json();
+    await authed(ctx, `/api/devices/${personalLaptop.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trackingMode: "alwaysLeisure" }),
+    });
+
+    // Company PC (always work): 1 hour on Saturday — a weekend day it still counts as work.
+    await ctx.app.request("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${companyPc.apiKey}` },
+      body: JSON.stringify({
+        timestamps: [0, 20, 40, 60].map((m) => new Date(saturday + 10 * 60 * MINUTE + m * MINUTE).toISOString()),
+      }),
+    });
+    // Personal Laptop (always leisure): 1 hour on Monday — a weekday it still counts as leisure.
+    await ctx.app.request("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${personalLaptop.apiKey}` },
+      body: JSON.stringify({
+        timestamps: [0, 20, 40, 60].map((m) => new Date(monday + 9 * 60 * MINUTE + m * MINUTE).toISOString()),
+      }),
+    });
+
+    return { ctx, companyPc, personalLaptop };
+  }
+
+  it("workType=work counts the always-work device's weekend time, not the always-leisure device's weekday time", async () => {
+    const { ctx } = await setUpTwoClassifiedDevices();
+
+    const response = await authed(ctx, "/api/stats/week?start=2026-03-09&workType=work");
+    const week = await response.json();
+
+    const mon = week.days.find((d: { date: string }) => d.date === "2026-03-09");
+    const sat = week.days.find((d: { date: string }) => d.date === "2026-03-14");
+    expect(mon.hours).toBe(0); // Personal Laptop's Monday time is always-leisure, excluded
+    expect(sat.hours).toBeGreaterThan(0); // Company PC's Saturday time is always-work, included
+  });
+
+  it("workType=leisure counts the always-leisure device's weekday time, not the always-work device's weekend time", async () => {
+    const { ctx } = await setUpTwoClassifiedDevices();
+
+    const response = await authed(ctx, "/api/stats/week?start=2026-03-09&workType=leisure");
+    const week = await response.json();
+
+    const mon = week.days.find((d: { date: string }) => d.date === "2026-03-09");
+    const sat = week.days.find((d: { date: string }) => d.date === "2026-03-14");
+    expect(mon.hours).toBeGreaterThan(0);
+    expect(sat.hours).toBe(0);
+  });
+
+  it("workType=all (default) counts both devices' time regardless of tracking mode", async () => {
+    const { ctx } = await setUpTwoClassifiedDevices();
+
+    const response = await authed(ctx, "/api/stats/week?start=2026-03-09");
+    const week = await response.json();
+
+    const mon = week.days.find((d: { date: string }) => d.date === "2026-03-09");
+    const sat = week.days.find((d: { date: string }) => d.date === "2026-03-14");
+    expect(mon.hours).toBeGreaterThan(0);
+    expect(sat.hours).toBeGreaterThan(0);
+  });
+
+  it("composes with ?dayType=: work time that only occurred on a weekend disappears under dayType=weekday", async () => {
+    const { ctx } = await setUpTwoClassifiedDevices();
+
+    const response = await authed(ctx, "/api/stats/summary?days=7&end=2026-03-16&workType=work&dayType=weekday");
+    const summary = await response.json();
+
+    // The only work-classified time in this fixture is Company PC's Saturday
+    // hour — a raw weekday filter on top must zero it back out.
+    expect(summary.totalHours).toBe(0);
+  });
+
+  it("rejects an unrecognized workType value", async () => {
+    const ctx = await setUp();
+    const response = await authed(ctx, "/api/stats/summary?days=7&workType=vacation");
+    expect(response.status).toBe(400);
+  });
+
+  it("longestSessionMinutes in the summary is scoped to the active workType filter", async () => {
+    const { ctx } = await setUpTwoClassifiedDevices();
+
+    const workOnly = await (
+      await authed(ctx, "/api/stats/summary?days=7&end=2026-03-16&workType=work")
+    ).json();
+    const leisureOnly = await (
+      await authed(ctx, "/api/stats/summary?days=7&end=2026-03-16&workType=leisure")
+    ).json();
+
+    expect(workOnly.longestSessionMinutes).toBeCloseTo(60, 0);
+    expect(leisureOnly.longestSessionMinutes).toBeCloseTo(60, 0);
+  });
+});
+
+describe("week-timeline device attribution (deviceIds)", () => {
+  it("attributes a solo segment to one device and an overlapping segment to both", async () => {
+    const ctx = await setUp();
+    const monday = Date.UTC(2026, 2, 9); // a Monday
+
+    const deviceA = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Laptop", platform: "mac" }),
+      })
+    ).json();
+    const deviceB = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Desktop", platform: "windows" }),
+      })
+    ).json();
+
+    // Device A: 09:00-09:40 (solo). Device B: 09:20-10:00 (solo), overlapping
+    // device A from 09:20-09:40.
+    await ctx.app.request("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${deviceA.apiKey}` },
+      body: JSON.stringify({
+        timestamps: [0, 20, 40].map((m) => new Date(monday + 9 * 60 * MINUTE + m * MINUTE).toISOString()),
+      }),
+    });
+    await ctx.app.request("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${deviceB.apiKey}` },
+      body: JSON.stringify({
+        timestamps: [20, 40, 60].map((m) => new Date(monday + 9 * 60 * MINUTE + m * MINUTE).toISOString()),
+      }),
+    });
+
+    const response = await authed(ctx, "/api/stats/week-timeline?start=2026-03-09");
+    const timeline = await response.json();
+
+    const mondaySegments = timeline.days.find((d: { date: string }) => d.date === "2026-03-09").segments;
+    expect(mondaySegments.map((s: { deviceIds: string[] }) => s.deviceIds.slice().sort())).toEqual([
+      [deviceA.id],
+      [deviceA.id, deviceB.id].sort(),
+      [deviceB.id],
+    ]);
+  });
+
+  it("scoping to one deviceId yields single-element deviceIds arrays only", async () => {
+    const ctx = await setUp();
+    const monday = Date.UTC(2026, 2, 9);
+
+    const deviceA = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Laptop", platform: "mac" }),
+      })
+    ).json();
+    await ctx.app.request("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${deviceA.apiKey}` },
+      body: JSON.stringify({
+        timestamps: [0, 20, 40].map((m) => new Date(monday + 9 * 60 * MINUTE + m * MINUTE).toISOString()),
+      }),
+    });
+
+    const response = await authed(ctx, `/api/stats/week-timeline?start=2026-03-09&deviceId=${deviceA.id}`);
+    const timeline = await response.json();
+    const mondaySegments = timeline.days.find((d: { date: string }) => d.date === "2026-03-09").segments;
+
+    expect(mondaySegments).toHaveLength(1);
+    expect(mondaySegments[0].deviceIds).toEqual([deviceA.id]);
   });
 });
 

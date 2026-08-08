@@ -1,3 +1,5 @@
+import type { TrackingMode } from "@worktracker/core";
+
 export type Platform = "windows" | "mac";
 
 export interface Device {
@@ -7,6 +9,7 @@ export interface Device {
   apiKeyHash: string;
   idleThresholdMinutes: number;
   pollIntervalSeconds: number;
+  trackingMode: TrackingMode;
   createdAt: number; // epoch ms
   lastSeenAt: number | null;
   revokedAt: number | null;
@@ -21,6 +24,7 @@ export interface NewDevice {
 export interface DeviceSettingsUpdate {
   idleThresholdMinutes?: number;
   pollIntervalSeconds?: number;
+  trackingMode?: TrackingMode;
 }
 
 export interface DevicesRepository {

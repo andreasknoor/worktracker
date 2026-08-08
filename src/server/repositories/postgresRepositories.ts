@@ -1,4 +1,5 @@
 import type { Pool } from "pg";
+import type { TrackingMode } from "@worktracker/core";
 import type {
   ActivityEventsRepository,
   Device,
@@ -18,6 +19,7 @@ interface DeviceRow {
   api_key_hash: string;
   idle_threshold_minutes: number;
   poll_interval_seconds: number;
+  tracking_mode: TrackingMode;
   created_at: Date;
   last_seen_at: Date | null;
   revoked_at: Date | null;
@@ -31,6 +33,7 @@ function toDevice(row: DeviceRow): Device {
     apiKeyHash: row.api_key_hash,
     idleThresholdMinutes: row.idle_threshold_minutes,
     pollIntervalSeconds: row.poll_interval_seconds,
+    trackingMode: row.tracking_mode,
     createdAt: row.created_at.getTime(),
     lastSeenAt: row.last_seen_at?.getTime() ?? null,
     revokedAt: row.revoked_at?.getTime() ?? null,
@@ -69,10 +72,11 @@ export class PostgresDevicesRepository implements DevicesRepository {
     const result = await this.pool.query<DeviceRow>(
       `UPDATE devices
        SET idle_threshold_minutes = COALESCE($2, idle_threshold_minutes),
-           poll_interval_seconds = COALESCE($3, poll_interval_seconds)
+           poll_interval_seconds = COALESCE($3, poll_interval_seconds),
+           tracking_mode = COALESCE($4, tracking_mode)
        WHERE id = $1
        RETURNING *`,
-      [id, update.idleThresholdMinutes ?? null, update.pollIntervalSeconds ?? null],
+      [id, update.idleThresholdMinutes ?? null, update.pollIntervalSeconds ?? null, update.trackingMode ?? null],
     );
     return result.rows[0] ? toDevice(result.rows[0]) : null;
   }

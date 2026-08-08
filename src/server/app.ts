@@ -4,6 +4,7 @@ import {
   addDays,
   dailyHours,
   dailySegments,
+  dailySegmentsWithSource,
   dateKeyInZone,
   formatHHmm,
   isWeekend,
@@ -15,7 +16,9 @@ import {
   type DailyHours,
   type DailySegments,
   type DateKey,
+  type TrackingMode,
   type WorkSession,
+  type WorkType,
 } from "@worktracker/core";
 import {
   DASHBOARD_SESSION_COOKIE,
@@ -27,7 +30,11 @@ import {
 } from "./auth.js";
 import { APP_VERSION, appTimeZone, isProduction } from "./config.js";
 import type { ActivityEventsRepository, DevicesRepository, SettingsRepository } from "./repositories/types.js";
-import { getMergedSessionsInRange } from "./services/sessionsService.js";
+import {
+  getAttributedSessionsInRange,
+  getClassifiedSessionsInRange,
+  getMergedSessionsInRange,
+} from "./services/sessionsService.js";
 
 const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -40,6 +47,8 @@ const MAX_EVENTS_PER_REQUEST = 5000;
 
 /** Device display names are user-controlled input rendered in the dashboard UI. */
 const MAX_DEVICE_NAME_LENGTH = 100;
+
+const TRACKING_MODE_VALUES: readonly TrackingMode[] = ["auto", "alwaysWork", "alwaysLeisure"];
 
 function isValidDateKey(value: string | undefined): value is DateKey {
   if (!value || !DATE_KEY_PATTERN.test(value)) return false;
@@ -106,6 +115,43 @@ function filterDailySegments(days: readonly DailySegments[], dayType: DayType): 
 function filterSessionsByDayType(sessions: readonly WorkSession[], dayType: DayType, timeZone: string): WorkSession[] {
   if (dayType === "all") return [...sessions];
   return sessions.filter((s) => matchesDayType(dateKeyInZone(s.start, timeZone), dayType));
+}
+
+// ---------- Work-type filtering (?workType=work|leisure|all) ----------
+//
+// A second, independent filter dimension from `?dayType=` above: classifies
+// logged time as work or leisure per device (`classifyDay`, using each
+// device's own `trackingMode`) rather than by raw calendar day alone. Both
+// filters can be applied at once. See docs/API_CONTRACT.md.
+
+const WORK_TYPE_VALUES: readonly WorkType[] = ["work", "leisure"];
+
+/** Parses the `?workType=` query param, returning an error Response on an unrecognized value. */
+function parseWorkType(c: Context): WorkType | "all" | Response {
+  const raw = c.req.query("workType");
+  if (raw === undefined || raw === "all") return "all";
+  if ((WORK_TYPE_VALUES as readonly string[]).includes(raw)) return raw as WorkType;
+  return c.json({ error: `workType must be one of: all, ${WORK_TYPE_VALUES.join(", ")}` }, 400);
+}
+
+/**
+ * Fetches sessions for a stats endpoint, applying the `?workType=` filter
+ * when active. Kept separate from `getAttributedSessionsInRange` (used only
+ * by `/api/stats/week-timeline`, which additionally needs per-device
+ * attribution for the Timeline chart's device coloring).
+ */
+async function getSessionsForRequest(
+  deps: AppDependencies,
+  startMs: number,
+  endExclusiveMs: number,
+  timeZone: string,
+  workType: WorkType | "all",
+  deviceId?: string,
+): Promise<WorkSession[]> {
+  if (workType === "all") {
+    return getMergedSessionsInRange(deps.devices, deps.events, startMs, endExclusiveMs, deviceId);
+  }
+  return getClassifiedSessionsInRange(deps.devices, deps.events, startMs, endExclusiveMs, timeZone, workType, deviceId);
 }
 
 // ---------- Login rate limiting ----------
@@ -236,6 +282,8 @@ export function createApp(deps: AppDependencies): Hono {
     if (deviceId instanceof Response) return deviceId;
     const dayType = parseDayType(c);
     if (dayType instanceof Response) return dayType;
+    const workType = parseWorkType(c);
+    if (workType instanceof Response) return workType;
 
     const start = c.req.query("start");
     if (!isValidDateKey(start)) {
@@ -243,11 +291,12 @@ export function createApp(deps: AppDependencies): Hono {
     }
     const endExclusive = addDays(start, 7);
 
-    const sessions = await getMergedSessionsInRange(
-      deps.devices,
-      deps.events,
+    const sessions = await getSessionsForRequest(
+      deps,
       Date.parse(start + "T00:00:00Z"),
       Date.parse(endExclusive + "T00:00:00Z"),
+      timeZone,
+      workType,
       deviceId,
     );
     const daily = filterDailyHours(dailyHours(sessions, start, endExclusive, timeZone), dayType);
@@ -264,6 +313,8 @@ export function createApp(deps: AppDependencies): Hono {
     if (deviceId instanceof Response) return deviceId;
     const dayType = parseDayType(c);
     if (dayType instanceof Response) return dayType;
+    const workType = parseWorkType(c);
+    if (workType instanceof Response) return workType;
 
     const start = c.req.query("start");
     if (!isValidDateKey(start)) {
@@ -271,14 +322,16 @@ export function createApp(deps: AppDependencies): Hono {
     }
     const endExclusive = addDays(start, 7);
 
-    const sessions = await getMergedSessionsInRange(
+    const sessions = await getAttributedSessionsInRange(
       deps.devices,
       deps.events,
       Date.parse(start + "T00:00:00Z"),
       Date.parse(endExclusive + "T00:00:00Z"),
+      timeZone,
+      workType,
       deviceId,
     );
-    const segments = filterDailySegments(dailySegments(sessions, start, endExclusive, timeZone), dayType);
+    const segments = filterDailySegments(dailySegmentsWithSource(sessions, start, endExclusive, timeZone), dayType);
 
     return c.json({
       weekStart: start,
@@ -292,6 +345,8 @@ export function createApp(deps: AppDependencies): Hono {
     if (deviceId instanceof Response) return deviceId;
     const dayType = parseDayType(c);
     if (dayType instanceof Response) return dayType;
+    const workType = parseWorkType(c);
+    if (workType instanceof Response) return workType;
 
     const monthAnyDate = c.req.query("month");
     if (!isValidDateKey(monthAnyDate)) {
@@ -300,11 +355,12 @@ export function createApp(deps: AppDependencies): Hono {
     const start = monthStart(monthAnyDate);
     const endExclusive = monthEndExclusive(monthAnyDate);
 
-    const sessions = await getMergedSessionsInRange(
-      deps.devices,
-      deps.events,
+    const sessions = await getSessionsForRequest(
+      deps,
       Date.parse(start + "T00:00:00Z"),
       Date.parse(endExclusive + "T00:00:00Z"),
+      timeZone,
+      workType,
       deviceId,
     );
     const daily = filterDailyHours(dailyHours(sessions, start, endExclusive, timeZone), dayType);
@@ -321,6 +377,8 @@ export function createApp(deps: AppDependencies): Hono {
     if (deviceId instanceof Response) return deviceId;
     const dayType = parseDayType(c);
     if (dayType instanceof Response) return dayType;
+    const workType = parseWorkType(c);
+    if (workType instanceof Response) return workType;
 
     const days = parseDaysParam(c);
     if (days instanceof Response) return days;
@@ -332,11 +390,12 @@ export function createApp(deps: AppDependencies): Hono {
     const endExclusive = endParam ?? isoDateKey(addOneDay(new Date()));
     const start = addDays(endExclusive, -days);
 
-    const sessions = await getMergedSessionsInRange(
-      deps.devices,
-      deps.events,
+    const sessions = await getSessionsForRequest(
+      deps,
       Date.parse(start + "T00:00:00Z"),
       Date.parse(endExclusive + "T00:00:00Z"),
+      timeZone,
+      workType,
       deviceId,
     );
     const daily = filterDailyHours(dailyHours(sessions, start, endExclusive, timeZone), dayType);
@@ -357,6 +416,8 @@ export function createApp(deps: AppDependencies): Hono {
     if (deviceId instanceof Response) return deviceId;
     const dayType = parseDayType(c);
     if (dayType instanceof Response) return dayType;
+    const workType = parseWorkType(c);
+    if (workType instanceof Response) return workType;
 
     const days = parseDaysParam(c);
     if (days instanceof Response) return days;
@@ -364,11 +425,12 @@ export function createApp(deps: AppDependencies): Hono {
     const endExclusive = isoDateKey(addOneDay(new Date()));
     const start = addDays(endExclusive, -days);
 
-    const sessions = await getMergedSessionsInRange(
-      deps.devices,
-      deps.events,
+    const sessions = await getSessionsForRequest(
+      deps,
       Date.parse(start + "T00:00:00Z"),
       Date.parse(endExclusive + "T00:00:00Z"),
+      timeZone,
+      workType,
       deviceId,
     );
 
@@ -464,6 +526,7 @@ export function createApp(deps: AppDependencies): Hono {
         platform: d.platform,
         idleThresholdMinutes: d.idleThresholdMinutes,
         pollIntervalSeconds: d.pollIntervalSeconds,
+        trackingMode: d.trackingMode,
         lastSeenAt: d.lastSeenAt ? new Date(d.lastSeenAt).toISOString() : null,
         revoked: d.revokedAt !== null,
       })),
@@ -493,20 +556,25 @@ export function createApp(deps: AppDependencies): Hono {
   });
 
   // Per-device idle threshold / poll interval — the per-source settings
-  // requested for this rewrite; see docs/IMPLEMENTATION_NOTES.md.
+  // requested for this rewrite; see docs/IMPLEMENTATION_NOTES.md. trackingMode
+  // is the work/leisure classification override (dimension 2) — see
+  // docs/API_CONTRACT.md.
   app.patch("/api/devices/:id", async (c) => {
     const id = c.req.param("id");
     if (!isUuid(id)) return c.json({ error: "Device not found" }, 404);
 
     const body = await c.req
-      .json<{ idleThresholdMinutes?: number; pollIntervalSeconds?: number }>()
-      .catch(() => ({ idleThresholdMinutes: undefined, pollIntervalSeconds: undefined }));
+      .json<{ idleThresholdMinutes?: number; pollIntervalSeconds?: number; trackingMode?: TrackingMode }>()
+      .catch(() => ({ idleThresholdMinutes: undefined, pollIntervalSeconds: undefined, trackingMode: undefined }));
 
     if (body.idleThresholdMinutes !== undefined && body.idleThresholdMinutes <= 0) {
       return c.json({ error: "idleThresholdMinutes must be > 0" }, 400);
     }
     if (body.pollIntervalSeconds !== undefined && body.pollIntervalSeconds <= 0) {
       return c.json({ error: "pollIntervalSeconds must be > 0" }, 400);
+    }
+    if (body.trackingMode !== undefined && !TRACKING_MODE_VALUES.includes(body.trackingMode)) {
+      return c.json({ error: `trackingMode must be one of: ${TRACKING_MODE_VALUES.join(", ")}` }, 400);
     }
 
     const updated = await deps.devices.updateSettings(id, body);
@@ -518,6 +586,7 @@ export function createApp(deps: AppDependencies): Hono {
       platform: updated.platform,
       idleThresholdMinutes: updated.idleThresholdMinutes,
       pollIntervalSeconds: updated.pollIntervalSeconds,
+      trackingMode: updated.trackingMode,
     });
   });
 

@@ -18,6 +18,13 @@
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   }
 
+  // A few table-rendering paths below build rows via innerHTML string
+  // concatenation and now need to interpolate a device name — user-controlled
+  // input (see the stored-XSS fix in renderDeviceRow) — so escape it first.
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
   function parseIsoDate(s) {
     const [y, m, d] = s.split("-").map(Number);
     return new Date(y, m - 1, d);
@@ -84,6 +91,7 @@
   const DEVICE_STORAGE_KEY = "wtk_selected_device";
   const CORE_HOURS_ONLY_STORAGE_KEY = "wtk_timeline_core_hours_only";
   const DAY_TYPE_STORAGE_KEY = "wtk_day_type";
+  const WORK_TYPE_STORAGE_KEY = "wtk_work_type";
 
   const state = {
     rangeDays: 7,        // used for stat tiles / trend / sessions; "all" resolves to a day count once first-activity is known
@@ -98,6 +106,7 @@
     selectedDeviceId: safeGetItem(DEVICE_STORAGE_KEY) || "", // "" = all devices combined
     timelineCoreHoursOnly: safeGetItem(CORE_HOURS_ONLY_STORAGE_KEY) === "1", // crop the timeline y-axis to core hours ± 1h
     dayType: safeGetItem(DAY_TYPE_STORAGE_KEY) || "all", // "all" | "weekday" | "weekend"
+    workType: safeGetItem(WORK_TYPE_STORAGE_KEY) || "all", // "all" | "work" | "leisure"
   };
 
   function setSelectedDeviceId(deviceId) {
@@ -114,6 +123,11 @@
     safeSetItem(DAY_TYPE_STORAGE_KEY, state.dayType);
   }
 
+  function setWorkType(workType) {
+    state.workType = workType || "all";
+    safeSetItem(WORK_TYPE_STORAGE_KEY, state.workType);
+  }
+
   function withDeviceParam(params) {
     if (state.selectedDeviceId) params.set("deviceId", state.selectedDeviceId);
     return params;
@@ -125,6 +139,7 @@
   function withStatsParams(params) {
     withDeviceParam(params);
     if (state.dayType !== "all") params.set("dayType", state.dayType);
+    if (state.workType !== "all") params.set("workType", state.workType);
     return params;
   }
 
@@ -567,9 +582,16 @@
         const segY = yForMinute(visStart);
         const segH = yForMinute(visEnd) - segY;
         if (segH <= 0) return;
+        // Per-segment fill by device (or the neutral overlap gray for
+        // simultaneous-device segments); .timeline-segment's CSS fill is only
+        // the default/fallback, overridden here. When a single device is
+        // already selected via the header filter, every segment trivially
+        // has one deviceId, so this resolves to that one color everywhere —
+        // visually identical to the old single-color rendering.
+        const fill = segmentFillColor(seg);
         parts.push(
           '<rect class="timeline-segment" tabindex="0" data-day-idx="' + i + '" data-seg-idx="' + segIdx + '" x="' + x.toFixed(1) +
-          '" y="' + segY.toFixed(1) + '" width="' + trackW.toFixed(1) + '" height="' + segH.toFixed(1) + '"></rect>'
+          '" y="' + segY.toFixed(1) + '" width="' + trackW.toFixed(1) + '" height="' + segH.toFixed(1) + '" style="fill:' + fill + '"></rect>'
         );
       });
 
@@ -591,8 +613,13 @@
       const cx = padL + slotW * dayIdx + slotW / 2;
       const durationLabel = fmtMinutes(seg.endMinutes - seg.startMinutes);
       const timeLabel = formatMinutesAsClock(seg.startMinutes) + "–" + formatMinutesAsClock(seg.endMinutes);
+      // Device name(s) are the accessibility-primary channel for device
+      // coloring — the color is a shortcut layered on top of this text, not
+      // the only signal, so it's included here even though a color is also shown.
+      const deviceLabel = segmentDeviceLabel(seg);
+      const valueLabel = timeLabel + " (" + durationLabel + ")" + (deviceLabel ? " · " + deviceLabel : "");
       showTooltip(svgRect.left + cx * scaleX, clientY,
-        formatWeekday(d.date) + ", " + formatShortDate(d.date), timeLabel + " (" + durationLabel + ")");
+        formatWeekday(d.date) + ", " + formatShortDate(d.date), valueLabel);
       rect.classList.add("active");
     }
     function hideSegmentTooltip(rect) {
@@ -611,18 +638,73 @@
       rect.addEventListener("blur", () => hideSegmentTooltip(rect));
     });
 
+    renderTimelineLegend(days);
     renderTimelineTable(days);
   }
 
+  // Shown above the Timeline chart only in the aggregated ("All devices")
+  // view — a specific device selection already has just one color, so
+  // there's nothing to key. Only devices that actually appear in the
+  // current week's segments get a swatch (not every device on the account),
+  // plus an "Overlap" swatch whenever any segment has 2+ deviceIds.
+  function renderTimelineLegend(days) {
+    const legendEl = document.getElementById("timelineLegend");
+
+    const seenDeviceIds = new Set();
+    let hasOverlap = false;
+    if (state.selectedDeviceId === "") {
+      days.forEach(d => d.segments.forEach(seg => {
+        if (!seg.deviceIds || seg.deviceIds.length === 0) return;
+        if (seg.deviceIds.length >= 2) hasOverlap = true;
+        else seenDeviceIds.add(seg.deviceIds[0]);
+      }));
+    }
+
+    if (seenDeviceIds.size === 0 && !hasOverlap) {
+      legendEl.style.display = "none";
+      legendEl.innerHTML = "";
+      return;
+    }
+
+    legendEl.innerHTML = "";
+    devicesCache.forEach((device, idx) => {
+      if (!seenDeviceIds.has(device.id)) return;
+      const item = document.createElement("div");
+      item.className = "legend-item";
+      const swatch = document.createElement("span");
+      swatch.className = "swatch";
+      swatch.style.background = colorForDeviceIndex(idx);
+      item.appendChild(swatch);
+      item.appendChild(document.createTextNode(device.name));
+      legendEl.appendChild(item);
+    });
+    if (hasOverlap) {
+      const item = document.createElement("div");
+      item.className = "legend-item";
+      const swatch = document.createElement("span");
+      swatch.className = "swatch";
+      swatch.style.background = "var(--overlap)";
+      item.appendChild(swatch);
+      item.appendChild(document.createTextNode("Overlap"));
+      legendEl.appendChild(item);
+    }
+    legendEl.style.display = "flex";
+  }
+
   function renderTimelineTable(days) {
+    const showDeviceColumn = state.selectedDeviceId === "";
     const rows = days.map(d => {
       const segmentsLabel = d.segments.length
         ? d.segments.map(s => formatMinutesAsClock(s.startMinutes) + "–" + formatMinutesAsClock(s.endMinutes)).join(", ")
         : "—";
-      return "<tr><td>" + formatWeekday(d.date) + ", " + formatShortDate(d.date) + "</td><td>" + segmentsLabel + "</td></tr>";
+      const deviceCell = showDeviceColumn
+        ? "<td>" + (d.segments.length ? d.segments.map(s => escapeHtml(segmentDeviceLabel(s))).join(", ") : "—") + "</td>"
+        : "";
+      return "<tr><td>" + formatWeekday(d.date) + ", " + formatShortDate(d.date) + "</td><td>" + segmentsLabel + "</td>" + deviceCell + "</tr>";
     }).join("");
+    const deviceHeader = showDeviceColumn ? "<th>Device</th>" : "";
     document.getElementById("weeklyTableWrap").innerHTML =
-      '<table class="data-table"><thead><tr><th>Day</th><th>Worked periods</th></tr></thead><tbody>' + rows + "</tbody></table>";
+      '<table class="data-table"><thead><tr><th>Day</th><th>Worked periods</th>' + deviceHeader + '</tr></thead><tbody>' + rows + "</tbody></table>";
   }
 
   /* ---------- Trend line chart ---------- */
@@ -794,6 +876,20 @@
       dayTypeGroup.querySelectorAll(".segmented-btn").forEach(b => b.setAttribute("aria-pressed", "false"));
       btn.setAttribute("aria-pressed", "true");
       setDayType(btn.getAttribute("data-day-type"));
+      renderAll();
+    });
+  });
+
+  const workTypeGroup = document.getElementById("workTypeGroup");
+  workTypeGroup.querySelectorAll(".segmented-btn").forEach(btn => {
+    if (btn.getAttribute("data-work-type") === state.workType) {
+      workTypeGroup.querySelectorAll(".segmented-btn").forEach(b => b.setAttribute("aria-pressed", "false"));
+      btn.setAttribute("aria-pressed", "true");
+    }
+    btn.addEventListener("click", () => {
+      workTypeGroup.querySelectorAll(".segmented-btn").forEach(b => b.setAttribute("aria-pressed", "false"));
+      btn.setAttribute("aria-pressed", "true");
+      setWorkType(btn.getAttribute("data-work-type"));
       renderAll();
     });
   });
@@ -1000,8 +1096,44 @@
 
   /* ---------- Wiring: devices modal (per-device idle threshold / poll interval) ---------- */
 
+  // Cached here (creation-order sorted, as returned by the API) so the
+  // Timeline chart's per-device coloring can reuse whichever device list was
+  // last fetched (by the device filter dropdown or the devices modal)
+  // instead of adding a redundant fetch on every renderAll(). Updated on
+  // every successful fetchDevices() call, from any call site.
+  let devicesCache = [];
+
   async function fetchDevices() {
-    return fetchJson("/api/devices");
+    const devices = await fetchJson("/api/devices");
+    devicesCache = devices;
+    return devices;
+  }
+
+  // Category color for a device's position in devicesCache (creation order):
+  // index 0 -> --series-1, ... index 7 -> --series-8. A 9th+ device, or a
+  // device id no longer present in devicesCache, falls back to the neutral
+  // --overlap gray — a deliberate, documented fallback (not expected for a
+  // personal-use tool), not a bug.
+  function colorForDeviceIndex(index) {
+    if (index >= 0 && index < 8) return "var(--series-" + (index + 1) + ")";
+    return "var(--overlap)";
+  }
+
+  function segmentFillColor(seg) {
+    if (!seg.deviceIds || seg.deviceIds.length !== 1) return "var(--overlap)";
+    const index = devicesCache.findIndex(d => d.id === seg.deviceIds[0]);
+    return colorForDeviceIndex(index);
+  }
+
+  function deviceNameById(id) {
+    const device = devicesCache.find(d => d.id === id);
+    return device ? device.name : "Unknown device";
+  }
+
+  function segmentDeviceLabel(seg) {
+    if (!seg.deviceIds || seg.deviceIds.length === 0) return "";
+    if (seg.deviceIds.length === 1) return deviceNameById(seg.deviceIds[0]);
+    return "Multiple devices";
   }
 
   async function createDevice(name, platform) {
@@ -1087,6 +1219,42 @@
     }
 
     row.appendChild(fieldRow);
+
+    // Work/leisure tracking-mode override (dimension 2 — independent of the
+    // idle/poll settings above, so it's its own field-row and its own PATCH
+    // on click rather than bundled into the "Save" button).
+    const modeRow = document.createElement("div");
+    modeRow.className = "field-row";
+    const modeLabel = document.createElement("label");
+    modeLabel.appendChild(document.createTextNode("Tracking "));
+    const modeGroup = document.createElement("span");
+    modeGroup.className = "tracking-mode-group";
+    modeGroup.setAttribute("role", "group");
+    modeGroup.setAttribute("aria-label", "Tracking mode");
+    const MODE_LABELS = { auto: "Auto", alwaysWork: "Always work", alwaysLeisure: "Always leisure" };
+    const modeButtons = Object.keys(MODE_LABELS).map(mode => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "tracking-mode-btn";
+      btn.textContent = MODE_LABELS[mode];
+      btn.setAttribute("aria-pressed", mode === device.trackingMode ? "true" : "false");
+      btn.disabled = !!device.revoked;
+      btn.addEventListener("click", async () => {
+        try {
+          await updateDeviceSettings(device.id, { trackingMode: mode });
+          modeButtons.forEach(b => b.setAttribute("aria-pressed", "false"));
+          btn.setAttribute("aria-pressed", "true");
+          showToast("Tracking mode saved");
+        } catch (err) {
+          showToast("Could not save tracking mode", true);
+        }
+      });
+      modeGroup.appendChild(btn);
+      return btn;
+    });
+    modeLabel.appendChild(modeGroup);
+    modeRow.appendChild(modeLabel);
+    row.appendChild(modeRow);
 
     if (saveBtn) {
       saveBtn.addEventListener("click", async () => {

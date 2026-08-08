@@ -12,6 +12,9 @@ One row per tracker installation (one Windows laptop, one Mac laptop, etc.).
 | `name` | text | user-chosen label, e.g. "Work Laptop (Windows)" |
 | `platform` | text | `"windows"` \| `"mac"` — informational only |
 | `api_key_hash` | text | hash of the device's API key (never store the raw key) |
+| `idle_threshold_minutes` | integer | per-device, not global — see `IMPLEMENTATION_NOTES.md` |
+| `poll_interval_seconds` | integer | per-device, not global — see `IMPLEMENTATION_NOTES.md` |
+| `tracking_mode` | text | `"auto"` (default) \| `"alwaysWork"` \| `"alwaysLeisure"` — overrides the default weekday=work/weekend=leisure classification for this device's logged time; see `API_CONTRACT.md`'s "Work/leisure filtering" |
 | `created_at` | timestamptz | |
 | `last_seen_at` | timestamptz, nullable | updated on each successful event ingest |
 | `revoked_at` | timestamptz, nullable | soft-revoke instead of deleting, so historical events keep a valid device reference |

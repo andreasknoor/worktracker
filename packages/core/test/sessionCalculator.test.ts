@@ -4,6 +4,7 @@ import {
   calculateSessions,
   effectiveResumeConfirmationWindow,
   mergeSessions,
+  mergeSessionsWithDeviceIds,
 } from "../src/sessionCalculator.js";
 
 // Ported 1:1 from reference-tests/SessionCalculatorTests.cs.
@@ -254,6 +255,82 @@ describe("mergeSessions", () => {
     expect(merged).toHaveLength(1);
     expect(merged[0]!.start).toBe(EPOCH);
     expect(merged[0]!.end).toBe(EPOCH + 20 * MINUTE);
+  });
+
+  it("mergeSessionsWithDeviceIds: single device keeps a one-element deviceIds list", () => {
+    const deviceA = [{ start: EPOCH, end: EPOCH + 10 * MINUTE }];
+
+    const merged = mergeSessionsWithDeviceIds(new Map([["a", deviceA]]));
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]!.deviceIds).toEqual(["a"]);
+  });
+
+  it("mergeSessionsWithDeviceIds: non-overlapping devices stay as separate attributed intervals", () => {
+    const deviceA = [{ start: EPOCH, end: EPOCH + 10 * MINUTE }];
+    const deviceB = [{ start: EPOCH + 60 * MINUTE, end: EPOCH + 70 * MINUTE }];
+
+    const merged = mergeSessionsWithDeviceIds(new Map([["a", deviceA], ["b", deviceB]]));
+
+    expect(merged).toHaveLength(2);
+    expect(merged[0]!.deviceIds).toEqual(["a"]);
+    expect(merged[1]!.deviceIds).toEqual(["b"]);
+  });
+
+  it("mergeSessionsWithDeviceIds: a partial overlap slices into solo/both/solo, not one blended interval", () => {
+    const deviceA = [{ start: EPOCH, end: EPOCH + 30 * MINUTE }];
+    const deviceB = [{ start: EPOCH + 20 * MINUTE, end: EPOCH + 40 * MINUTE }];
+
+    const merged = mergeSessionsWithDeviceIds(new Map([["a", deviceA], ["b", deviceB]]));
+
+    expect(merged).toHaveLength(3);
+    expect(merged[0]).toEqual({ start: EPOCH, end: EPOCH + 20 * MINUTE, deviceIds: ["a"] });
+    expect(merged[1]).toEqual({ start: EPOCH + 20 * MINUTE, end: EPOCH + 30 * MINUTE, deviceIds: ["a", "b"] });
+    expect(merged[2]).toEqual({ start: EPOCH + 30 * MINUTE, end: EPOCH + 40 * MINUTE, deviceIds: ["b"] });
+  });
+
+  it("mergeSessionsWithDeviceIds: one session fully inside another slices into solo/both/solo", () => {
+    const deviceA = [{ start: EPOCH, end: EPOCH + 60 * MINUTE }];
+    const deviceB = [{ start: EPOCH + 20 * MINUTE, end: EPOCH + 30 * MINUTE }];
+
+    const merged = mergeSessionsWithDeviceIds(new Map([["a", deviceA], ["b", deviceB]]));
+
+    expect(merged).toHaveLength(3);
+    expect(merged[0]).toEqual({ start: EPOCH, end: EPOCH + 20 * MINUTE, deviceIds: ["a"] });
+    expect(merged[1]).toEqual({ start: EPOCH + 20 * MINUTE, end: EPOCH + 30 * MINUTE, deviceIds: ["a", "b"] });
+    expect(merged[2]).toEqual({ start: EPOCH + 30 * MINUTE, end: EPOCH + 60 * MINUTE, deviceIds: ["a"] });
+  });
+
+  it("mergeSessionsWithDeviceIds: three devices overlapping in a chain slice at every boundary", () => {
+    const deviceA = [{ start: EPOCH, end: EPOCH + 20 * MINUTE }];
+    const deviceB = [{ start: EPOCH + 10 * MINUTE, end: EPOCH + 30 * MINUTE }];
+    const deviceC = [{ start: EPOCH + 25 * MINUTE, end: EPOCH + 45 * MINUTE }];
+
+    const merged = mergeSessionsWithDeviceIds(new Map([["a", deviceA], ["b", deviceB], ["c", deviceC]]));
+
+    expect(merged.map((m) => ({ ...m, deviceIds: m.deviceIds.sort() }))).toEqual([
+      { start: EPOCH, end: EPOCH + 10 * MINUTE, deviceIds: ["a"] },
+      { start: EPOCH + 10 * MINUTE, end: EPOCH + 20 * MINUTE, deviceIds: ["a", "b"] },
+      { start: EPOCH + 20 * MINUTE, end: EPOCH + 25 * MINUTE, deviceIds: ["b"] },
+      { start: EPOCH + 25 * MINUTE, end: EPOCH + 30 * MINUTE, deviceIds: ["b", "c"] },
+      { start: EPOCH + 30 * MINUTE, end: EPOCH + 45 * MINUTE, deviceIds: ["c"] },
+    ]);
+  });
+
+  it("mergeSessionsWithDeviceIds: total duration always matches mergeSessions's (attribution doesn't change totals)", () => {
+    const deviceA = [{ start: EPOCH, end: EPOCH + 30 * MINUTE }];
+    const deviceB = [{ start: EPOCH + 20 * MINUTE, end: EPOCH + 40 * MINUTE }];
+    const deviceC = [{ start: EPOCH + 60 * MINUTE, end: EPOCH + 70 * MINUTE }];
+
+    const plain = mergeSessions([deviceA, deviceB, deviceC]);
+    const attributed = mergeSessionsWithDeviceIds(new Map([["a", deviceA], ["b", deviceB], ["c", deviceC]]));
+
+    const sum = (sessions: { start: number; end: number }[]) => sessions.reduce((s, x) => s + (x.end - x.start), 0);
+    expect(sum(attributed)).toBe(sum(plain));
+  });
+
+  it("mergeSessionsWithDeviceIds: empty input returns an empty list", () => {
+    expect(mergeSessionsWithDeviceIds(new Map())).toEqual([]);
   });
 
   it("rejects a non-positive idleThreshold", () => {

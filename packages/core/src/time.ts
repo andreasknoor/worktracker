@@ -1,4 +1,4 @@
-import type { Timestamp } from "./types.js";
+import type { Timestamp, TrackingMode, WorkType } from "./types.js";
 
 /** IANA time zone identifier, e.g. "Europe/Berlin". */
 export type TimeZone = string;
@@ -111,4 +111,16 @@ export function isWeekend(dateKey: DateKey): boolean {
   const [y, m, d] = dateKey.split("-").map(Number) as [number, number, number];
   const weekday = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0 Sun .. 6 Sat
   return weekday === 0 || weekday === 6;
+}
+
+/**
+ * Classifies a calendar day as work or leisure time for a device with the
+ * given tracking mode. `auto` follows the default rule (Mon-Fri = work,
+ * Sat-Sun = leisure); `alwaysWork`/`alwaysLeisure` override it regardless of
+ * the day of week.
+ */
+export function classifyDay(dateKey: DateKey, trackingMode: TrackingMode): WorkType {
+  if (trackingMode === "alwaysWork") return "work";
+  if (trackingMode === "alwaysLeisure") return "leisure";
+  return isWeekend(dateKey) ? "leisure" : "work";
 }

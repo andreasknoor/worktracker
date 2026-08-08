@@ -13,6 +13,11 @@
   --series-2:       #eb6834;
   --series-3:       #1baf7a;
   --series-4:       #eda100;
+  --series-5:       #e87ba4;
+  --series-6:       #008300;
+  --series-7:       #4a3aa7;
+  --series-8:       #e34948;
+  --overlap:        #898781;
   --status-good:    #0ca30c;
   --status-warning: #fab219;
   --status-serious: #ec835a;
@@ -37,6 +42,11 @@
     --series-2:       #d95926;
     --series-3:       #199e70;
     --series-4:       #c98500;
+    --series-5:       #d55181;
+    --series-6:       #008300;
+    --series-7:       #9085e9;
+    --series-8:       #e66767;
+    --overlap:        #898781;
     --success-text:   #0ca30c;
     --danger-text:    #e66767;
   }
@@ -56,6 +66,11 @@
   --series-2:       #d95926;
   --series-3:       #199e70;
   --series-4:       #c98500;
+  --series-5:       #d55181;
+  --series-6:       #008300;
+  --series-7:       #9085e9;
+  --series-8:       #e66767;
+  --overlap:        #898781;
   --success-text:   #0ca30c;
   --danger-text:    #e66767;
 }
@@ -418,10 +433,31 @@ table.data-table td.num, table.data-table th.num {
 /* Timeline (24h-per-day) view */
 .timeline-track { fill: var(--gridline); }
 .timeline-core-hours { fill: var(--series-1); opacity: 0.10; }
+/* Default/fallback fill — overridden per-segment via an inline style once
+   device colors are known (see renderTimelineChart in app.js). Covers the
+   brief pre-render state and any path that doesn't set an inline fill. */
 .timeline-segment { fill: var(--series-1); cursor: pointer; }
 .timeline-segment:hover, .timeline-segment.active { fill: color-mix(in srgb, var(--series-1) 85%, white 15%); }
 .timeline-hour-line { stroke: var(--gridline); stroke-width: 1; }
 .timeline-core-hours-label { font-size: 10px; fill: var(--text-muted); }
+
+/* Device-color legend, shown above the timeline chart in the aggregated
+   (all-devices) view only — one swatch per device that actually appears in
+   the current segments, plus an "Overlap" swatch when applicable. */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.legend-item .swatch {
+  width: 10px; height: 10px;
+  border-radius: 3px;
+  flex: none;
+}
 
 /* Empty state */
 .empty-state {
@@ -487,6 +523,27 @@ table.data-table td.num, table.data-table th.num {
 .device-row-name { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
 .device-row .field-row { flex-wrap: wrap; }
 .device-row label { font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; gap: 4px; }
+.device-row .field-row + .field-row { margin-top: 6px; }
+.tracking-mode-group { display: flex; gap: 4px; }
+.tracking-mode-btn {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.tracking-mode-btn:hover { background: var(--gridline); }
+.tracking-mode-btn[aria-pressed="true"] {
+  background: var(--series-1);
+  border-color: var(--series-1);
+  color: white;
+}
+.tracking-mode-btn:disabled { opacity: 0.4; cursor: default; }
+.tracking-mode-btn:disabled:hover { background: transparent; }
 .device-row input[type="number"] {
   width: 64px;
   padding: 4px 6px;

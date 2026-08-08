@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dailyHours, dailySegments, liveView, summary } from "../src/statistics.js";
+import { dailyHours, dailySegments, dailySegmentsWithSource, liveView, splitByDay, summary } from "../src/statistics.js";
 import type { WorkSession } from "../src/types.js";
 
 // Ported 1:1 from reference-tests/StatisticsServiceTests.cs. Test names mirror
@@ -209,5 +209,61 @@ describe("StatsEndpointsTests / live (derived from live-related scenarios)", () 
     expect(result.isActive).toBe(false);
     expect(result.currentSessionMs).toBe(0);
     expect(result.todayWorkedTimeMs).toBeGreaterThan(0);
+  });
+});
+
+describe("splitByDay", () => {
+  it("returns one slice for a session entirely within one day", () => {
+    const start = Date.UTC(2026, 2, 9, 9, 0, 0); // Monday
+    const session: WorkSession = { start, end: start + HOUR };
+
+    const slices = splitByDay([session], UTC);
+
+    expect(slices).toHaveLength(1);
+    expect(slices[0]!.date).toBe("2026-03-09");
+    expect(slices[0]!.start).toBe(session.start);
+    expect(slices[0]!.end).toBe(session.end);
+  });
+
+  it("splits a session spanning midnight into one slice per day touched", () => {
+    const start = Date.UTC(2026, 2, 13, 22, 0, 0); // Friday 22:00
+    const end = Date.UTC(2026, 2, 14, 2, 0, 0); // Saturday 02:00
+    const session: WorkSession = { start, end };
+
+    const slices = splitByDay([session], UTC);
+
+    expect(slices).toHaveLength(2);
+    expect(slices[0]!.date).toBe("2026-03-13");
+    expect(slices[0]!.end).toBe(Date.UTC(2026, 2, 14, 0, 0, 0));
+    expect(slices[1]!.date).toBe("2026-03-14");
+    expect(slices[1]!.start).toBe(Date.UTC(2026, 2, 14, 0, 0, 0));
+  });
+
+  it("drops a zero-duration session (consistent with dailyHours/dailySegments)", () => {
+    const at = Date.UTC(2026, 2, 9, 9, 0, 0);
+    expect(splitByDay([{ start: at, end: at }], UTC)).toEqual([]);
+  });
+});
+
+describe("dailySegmentsWithSource", () => {
+  it("carries deviceIds through to each day's segments", () => {
+    const sessions = [
+      { start: Date.UTC(2026, 2, 9, 9, 0, 0), end: Date.UTC(2026, 2, 9, 10, 0, 0), deviceIds: ["a"] },
+      { start: Date.UTC(2026, 2, 9, 11, 0, 0), end: Date.UTC(2026, 2, 9, 12, 0, 0), deviceIds: ["a", "b"] },
+    ];
+
+    const days = dailySegmentsWithSource(sessions, "2026-03-09", "2026-03-10", UTC);
+
+    expect(days).toHaveLength(1);
+    expect(days[0]!.segments).toHaveLength(2);
+    expect(days[0]!.segments[0]!.deviceIds).toEqual(["a"]);
+    expect(days[0]!.segments[1]!.deviceIds).toEqual(["a", "b"]);
+  });
+
+  it("returns an empty segments array for days with no attributed sessions", () => {
+    const days = dailySegmentsWithSource([], "2026-03-09", "2026-03-11", UTC);
+
+    expect(days).toHaveLength(2);
+    expect(days.every((d) => d.segments.length === 0)).toBe(true);
   });
 });

@@ -29,6 +29,43 @@ export interface LiveView {
   currentSessionMs: number;
 }
 
+/** A `WorkSession` known to have been contributed by one or more devices, merged via `mergeSessionsWithDeviceIds`. */
+export interface AttributedSession extends WorkSession {
+  deviceIds: string[];
+}
+
+export interface AttributedTimeSegment extends TimeSegment {
+  deviceIds: string[];
+}
+
+export interface AttributedDailySegments {
+  date: DateKey;
+  segments: AttributedTimeSegment[];
+}
+
+/**
+ * A session sliced into one sub-interval per calendar day (in `timeZone`) it
+ * touches — the same midnight-splitting used by `dailyHours`/`dailySegments`,
+ * exposed as data instead of an accumulated total. Used where each day-slice
+ * needs to be classified independently (see `classifyDay`) before being
+ * merged back across devices, since a device's work/leisure classification
+ * can differ from one day to the next.
+ */
+export function splitByDay(sessions: readonly WorkSession[], timeZone: TimeZone): Array<WorkSession & { date: DateKey }> {
+  const result: Array<WorkSession & { date: DateKey }> = [];
+  for (const session of sessions) {
+    let cursor = session.start;
+    while (cursor < session.end) {
+      const date = dateKeyInZone(cursor, timeZone);
+      const nextDayStart = startOfDayUtcMs(addDays(date, 1), timeZone);
+      const sliceEnd = Math.min(session.end, nextDayStart);
+      result.push({ date, start: cursor, end: sliceEnd });
+      cursor = sliceEnd;
+    }
+  }
+  return result;
+}
+
 /**
  * Splits each session's duration proportionally across the calendar days
  * (in `timeZone`) it touches, clipped to each day's own [00:00, 24:00) range.
@@ -83,6 +120,41 @@ export function dailySegments(
         result[idx]!.segments.push({
           startMinutes: (sliceStart - dayStart) / 60_000,
           endMinutes: (sliceEnd - dayStart) / 60_000,
+        });
+      }
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Same midnight-splitting idea as `dailySegments`, but for sessions already
+ * tagged with the device(s) that contributed to them (see
+ * `mergeSessionsWithDeviceIds`) — each resulting segment carries `deviceIds`
+ * through, for coloring the aggregated timeline chart per device.
+ */
+export function dailySegmentsWithSource(
+  sessions: readonly AttributedSession[],
+  startKey: DateKey,
+  endExclusiveKey: DateKey,
+  timeZone: TimeZone,
+): AttributedDailySegments[] {
+  const days = daysBetween(startKey, endExclusiveKey);
+  const result: AttributedDailySegments[] = days.map((date) => ({ date, segments: [] }));
+  const indexByDate = new Map(result.map((r, i) => [r.date, i]));
+
+  const rangeStartMs = startOfDayUtcMs(startKey, timeZone);
+  const rangeEndMs = startOfDayUtcMs(endExclusiveKey, timeZone);
+
+  for (const session of sessions) {
+    forEachDaySlice(session, rangeStartMs, rangeEndMs, timeZone, (dayKey, sliceStart, sliceEnd, dayStart) => {
+      const idx = indexByDate.get(dayKey);
+      if (idx !== undefined) {
+        result[idx]!.segments.push({
+          startMinutes: (sliceStart - dayStart) / 60_000,
+          endMinutes: (sliceEnd - dayStart) / 60_000,
+          deviceIds: session.deviceIds,
         });
       }
     });
