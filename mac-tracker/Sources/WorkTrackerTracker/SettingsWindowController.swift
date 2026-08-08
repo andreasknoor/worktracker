@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 
 /// A real settings window — deliberately not an `NSAlert` accessory view.
 /// NSAlert's modal accessory views have known rough edges hosting
@@ -12,6 +13,8 @@ final class SettingsWindowController: NSWindowController {
     private let serverTextView = NSTextView()
     private let apiKeyTextView = NSTextView()
     private let pollField = NSTextField()
+    private let startAtLoginCheckbox = NSButton(checkboxWithTitle: "Start WorkTracker at login", target: nil, action: nil)
+    private let startAtLoginHint = NSTextField(labelWithString: "")
     private let onSave: (TrackerConfig) -> Void
 
     private static let fieldWidth: CGFloat = 460
@@ -28,7 +31,7 @@ final class SettingsWindowController: NSWindowController {
         self.onSave = onSave
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 340),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 390),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -54,6 +57,7 @@ final class SettingsWindowController: NSWindowController {
     }
 
     func show() {
+        refreshStartAtLoginState()
         NSApp.activate(ignoringOtherApps: true)
         window?.center()
         window?.makeKeyAndOrderFront(nil)
@@ -72,6 +76,15 @@ final class SettingsWindowController: NSWindowController {
 
         pollField.translatesAutoresizingMaskIntoConstraints = false
         pollField.widthAnchor.constraint(equalToConstant: 100).isActive = true
+
+        startAtLoginCheckbox.target = self
+        startAtLoginCheckbox.action = #selector(toggleStartAtLogin)
+        startAtLoginHint.font = .systemFont(ofSize: 11)
+        startAtLoginHint.textColor = .secondaryLabelColor
+        let startAtLoginColumn = NSStackView(views: [startAtLoginCheckbox, startAtLoginHint])
+        startAtLoginColumn.orientation = .vertical
+        startAtLoginColumn.alignment = .leading
+        startAtLoginColumn.spacing = 2
 
         let saveButton = NSButton(title: "Save", target: self, action: #selector(save))
         saveButton.keyEquivalent = "\r"
@@ -92,6 +105,7 @@ final class SettingsWindowController: NSWindowController {
             labeled("Server URL (e.g. https://your-project.vercel.app)", serverScroll),
             labeled("API Key", apiKeyScroll),
             labeled("Poll interval (seconds)", pollField),
+            startAtLoginColumn,
             buttonRow,
         ])
         stack.orientation = .vertical
@@ -124,6 +138,46 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func cancel() {
         window?.orderOut(nil)
+    }
+
+    /// Registers/unregisters the app as a login item via `SMAppService`
+    /// (macOS 13+) — the modern replacement for the old
+    /// `SMLoginItemSetEnabled`/`LSSharedFileList` APIs, and doesn't need a
+    /// separate helper-tool bundle: the main app registers itself. Only
+    /// works reliably when running from a real `.app` bundle at a stable
+    /// path (see `mac-tracker/build-app.sh`) — macOS remembers that exact
+    /// bundle location to relaunch at login.
+    @objc private func toggleStartAtLogin() {
+        do {
+            if startAtLoginCheckbox.state == .on {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Couldn't update login item"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
+        refreshStartAtLoginState()
+    }
+
+    private func refreshStartAtLoginState() {
+        let status = SMAppService.mainApp.status
+        startAtLoginCheckbox.state = status == .enabled ? .on : .off
+        switch status {
+        case .enabled:
+            startAtLoginHint.stringValue = "Enabled."
+        case .requiresApproval:
+            startAtLoginHint.stringValue = "Needs approval in System Settings → General → Login Items."
+        case .notFound:
+            startAtLoginHint.stringValue = "Not available (app isn't running from a proper .app bundle)."
+        case .notRegistered:
+            startAtLoginHint.stringValue = ""
+        @unknown default:
+            startAtLoginHint.stringValue = ""
+        }
     }
 
     private func labeled(_ text: String, _ view: NSView) -> NSView {
