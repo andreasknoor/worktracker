@@ -49,6 +49,12 @@ final class ActivityQueue {
     private var consecutiveFailureCount = 0
     private var nextAllowedFlushAt: Date?
 
+    /// When the last batch was actually accepted by the server — not just
+    /// attempted. Persisted across restarts (in the same queue file) so the
+    /// status item shows an accurate value immediately after launch, not
+    /// "Never synced" just because this process hasn't flushed yet.
+    private(set) var lastSuccessfulSyncAt: Date?
+
     init(
         storageURL: URL,
         maxPendingCount: Int = ActivityQueue.defaultMaxPendingCount,
@@ -66,7 +72,9 @@ final class ActivityQueue {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         self.dateFormatter = formatter
-        self.pending = Self.load(from: storageURL, using: formatter)
+        let loaded = Self.load(from: storageURL, using: formatter)
+        self.pending = loaded.pending
+        self.lastSuccessfulSyncAt = loaded.lastSuccessfulSyncAt
     }
 
     var pendingCount: Int { pending.count }
@@ -108,6 +116,7 @@ final class ActivityQueue {
             pending.removeAll()
             consecutiveFailureCount = 0
             nextAllowedFlushAt = nil
+            lastSuccessfulSyncAt = now()
             hasUnpersistedChanges = true
             persist()
         } catch {
@@ -146,8 +155,11 @@ final class ActivityQueue {
     }
 
     private func persist() {
-        let strings = pending.map { dateFormatter.string(from: $0) }
-        guard let data = try? JSONEncoder().encode(strings) else { return }
+        let state = PersistedState(
+            pending: pending.map { dateFormatter.string(from: $0) },
+            lastSuccessfulSyncAt: lastSuccessfulSyncAt.map { dateFormatter.string(from: $0) }
+        )
+        guard let data = try? JSONEncoder().encode(state) else { return }
         try? FileManager.default.createDirectory(
             at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true
         )
@@ -156,10 +168,30 @@ final class ActivityQueue {
         hasUnpersistedChanges = false
     }
 
-    private static func load(from url: URL, using formatter: ISO8601DateFormatter) -> [Date] {
-        guard let data = try? Data(contentsOf: url),
-              let strings = try? JSONDecoder().decode([String].self, from: data)
-        else { return [] }
-        return strings.compactMap { formatter.date(from: $0) }
+    /// The on-disk shape. Kept separate from `[Date]`/`Date` so it can be
+    /// `Codable` without teaching `Date` to round-trip through the same
+    /// `ISO8601DateFormatter` this class already uses elsewhere.
+    private struct PersistedState: Codable {
+        var pending: [String]
+        var lastSuccessfulSyncAt: String?
+    }
+
+    private static func load(from url: URL, using formatter: ISO8601DateFormatter) -> (pending: [Date], lastSuccessfulSyncAt: Date?) {
+        guard let data = try? Data(contentsOf: url) else { return ([], nil) }
+
+        if let state = try? JSONDecoder().decode(PersistedState.self, from: data) {
+            let pending = state.pending.compactMap { formatter.date(from: $0) }
+            let lastSync = state.lastSuccessfulSyncAt.flatMap { formatter.date(from: $0) }
+            return (pending, lastSync)
+        }
+
+        // Older queue files are a bare `[String]` of pending timestamps
+        // (no lastSuccessfulSyncAt yet) — fall back to that shape so
+        // upgrading doesn't drop an existing queue.
+        if let strings = try? JSONDecoder().decode([String].self, from: data) {
+            return (strings.compactMap { formatter.date(from: $0) }, nil)
+        }
+
+        return ([], nil)
     }
 }

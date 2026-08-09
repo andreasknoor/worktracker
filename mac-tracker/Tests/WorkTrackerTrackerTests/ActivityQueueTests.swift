@@ -76,6 +76,64 @@ final class ActivityQueueTests: XCTestCase {
         XCTAssertEqual(queue.pendingCount, 1)
     }
 
+    // MARK: - lastSuccessfulSyncAt
+
+    func test_lastSuccessfulSyncAt_isNilInitially() {
+        let queue = ActivityQueue(storageURL: tempURL)
+        XCTAssertNil(queue.lastSuccessfulSyncAt)
+    }
+
+    func test_flush_onSuccess_setsLastSuccessfulSyncAt() async {
+        let clock = FakeClock()
+        let queue = ActivityQueue(storageURL: tempURL, now: clock.now)
+        queue.enqueue(clock.now())
+        clock.advance(by: 42)
+
+        await queue.flush(client: FakeEventsAPIClient(), serverBaseURL: "https://example.vercel.app", apiKey: "k")
+
+        XCTAssertEqual(queue.lastSuccessfulSyncAt, clock.now())
+    }
+
+    func test_flush_onFailure_doesNotSetLastSuccessfulSyncAt() async {
+        let queue = ActivityQueue(storageURL: tempURL)
+        queue.enqueue(Date())
+        let client = FakeEventsAPIClient()
+        client.shouldFail = true
+
+        await queue.flush(client: client, serverBaseURL: "https://example.vercel.app", apiKey: "k")
+
+        XCTAssertNil(queue.lastSuccessfulSyncAt)
+    }
+
+    func test_lastSuccessfulSyncAt_survivesRestart_byPersistingToDisk() async {
+        // A whole-second FakeClock value, not the real system clock: ISO
+        // 8601 round-tripping only preserves millisecond precision, so
+        // comparing against `Date()`'s full (sub-millisecond) precision
+        // would be a flaky equality check.
+        let clock = FakeClock()
+        let firstInstance = ActivityQueue(storageURL: tempURL, persistDebounceInterval: 0, now: clock.now)
+        firstInstance.enqueue(clock.now())
+        await firstInstance.flush(client: FakeEventsAPIClient(), serverBaseURL: "https://example.vercel.app", apiKey: "k")
+
+        let secondInstance = ActivityQueue(storageURL: tempURL)
+        XCTAssertEqual(secondInstance.lastSuccessfulSyncAt, clock.now())
+    }
+
+    func test_loadsAnOlderQueueFile_writtenBeforeLastSuccessfulSyncAtExisted() throws {
+        // Pre-upgrade queue files are a bare `[String]` of ISO 8601
+        // timestamps, with no lastSuccessfulSyncAt field at all.
+        try FileManager.default.createDirectory(at: tempURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let legacyJSON = try JSONEncoder().encode([formatter.string(from: Date())])
+        try legacyJSON.write(to: tempURL)
+
+        let queue = ActivityQueue(storageURL: tempURL)
+
+        XCTAssertEqual(queue.pendingCount, 1, "the legacy pending entry should still load")
+        XCTAssertNil(queue.lastSuccessfulSyncAt, "an old file has no sync history to report")
+    }
+
     func test_flush_onEmptyQueue_doesNotCallTheClient() async {
         let queue = ActivityQueue(storageURL: tempURL)
         let client = FakeEventsAPIClient()

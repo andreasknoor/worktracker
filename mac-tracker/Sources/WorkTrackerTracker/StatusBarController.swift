@@ -8,29 +8,40 @@ final class StatusBarController {
     private let statusItem: NSStatusItem
     private let statusMenuItem: NSMenuItem
     private let pendingMenuItem: NSMenuItem
+    private let lastSyncMenuItem: NSMenuItem
     var onSettingsSaved: ((TrackerConfig) -> Void)?
 
     private var currentConfig: TrackerConfig
     private var settingsWindowController: SettingsWindowController?
+
+    /// Sticky across `update()` calls that don't pass a fresh value (e.g.
+    /// the settings-saved callback below, which has no queue reference of
+    /// its own) — otherwise the line would flicker back to "Never" any time
+    /// something else about the status changes.
+    private var lastKnownSyncAt: Date?
+
+    private static let lastSyncFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .medium
+        return formatter
+    }()
 
     init(initialConfig: TrackerConfig) {
         self.currentConfig = initialConfig
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         pendingMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        lastSyncMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
 
-        // A lone small SF Symbol dot is easy to miss (or mistake for another
-        // app's icon) in a crowded menu bar. Pairing it with a short text
-        // label makes the item unmistakable.
         statusItem.button?.image = NSImage(
-            systemSymbolName: "circle.dashed", accessibilityDescription: "WorkTracker"
+            systemSymbolName: "stopwatch", accessibilityDescription: "WorkTracker"
         )
-        statusItem.button?.imagePosition = .imageLeading
-        statusItem.button?.title = "WTK"
 
         let menu = NSMenu()
         menu.addItem(statusMenuItem)
         menu.addItem(pendingMenuItem)
+        menu.addItem(lastSyncMenuItem)
         menu.addItem(.separator())
 
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
@@ -45,16 +56,22 @@ final class StatusBarController {
         update(isActive: false, pendingCount: 0)
     }
 
-    func update(isActive: Bool, pendingCount: Int) {
+    func update(isActive: Bool, pendingCount: Int, lastSuccessfulSyncAt: Date? = nil) {
+        if let lastSuccessfulSyncAt {
+            lastKnownSyncAt = lastSuccessfulSyncAt
+        }
+
         if !currentConfig.isConfigured {
             statusMenuItem.title = "Not configured — open Settings…"
         } else {
             statusMenuItem.title = isActive ? "Status: Active" : "Status: Idle"
         }
         pendingMenuItem.title = pendingCount == 0 ? "All events synced" : "\(pendingCount) event(s) queued"
+        lastSyncMenuItem.title = lastKnownSyncAt.map { "Last synced: \(Self.lastSyncFormatter.string(from: $0))" }
+            ?? "Last synced: never"
 
         statusItem.button?.image = NSImage(
-            systemSymbolName: isActive ? "circle.fill" : "circle.dashed",
+            systemSymbolName: isActive ? "stopwatch.fill" : "stopwatch",
             accessibilityDescription: "WorkTracker"
         )
     }

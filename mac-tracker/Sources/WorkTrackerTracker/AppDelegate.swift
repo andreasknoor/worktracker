@@ -46,7 +46,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         flushTimer?.invalidate()
 
         guard config.isConfigured else {
-            statusBarController.update(isActive: false, pendingCount: activityQueue.pendingCount)
+            statusBarController.update(
+                isActive: false, pendingCount: activityQueue.pendingCount, lastSuccessfulSyncAt: activityQueue.lastSuccessfulSyncAt
+            )
             return
         }
 
@@ -70,7 +72,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RunLoop.main.add(timer, forMode: .common)
         flushTimer = timer
 
-        statusBarController.update(isActive: false, pendingCount: activityQueue.pendingCount)
+        statusBarController.update(
+            isActive: false, pendingCount: activityQueue.pendingCount, lastSuccessfulSyncAt: activityQueue.lastSuccessfulSyncAt
+        )
     }
 
     /// A minimal application menu with a standard Edit submenu. Without one,
@@ -106,7 +110,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func recordActivity() {
         activityQueue.enqueue(Date())
-        statusBarController.update(isActive: true, pendingCount: activityQueue.pendingCount)
+        statusBarController.update(
+            isActive: true, pendingCount: activityQueue.pendingCount, lastSuccessfulSyncAt: activityQueue.lastSuccessfulSyncAt
+        )
     }
 
     private func flushQueue() {
@@ -118,7 +124,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             await queue.flush(client: client, serverBaseURL: serverBaseURL, apiKey: apiKey)
             await MainActor.run {
-                self.statusBarController.update(isActive: false, pendingCount: queue.pendingCount)
+                self.statusBarController.update(
+                    isActive: false, pendingCount: queue.pendingCount, lastSuccessfulSyncAt: queue.lastSuccessfulSyncAt
+                )
             }
         }
     }
