@@ -201,7 +201,12 @@
     <div id="devicesList" class="devices-list"></div>
 
     <div class="field-row" style="margin-top: 12px;">
-      <input type="text" id="newDeviceName" placeholder="Device name, e.g. Work Laptop">
+      <!-- autocomplete/data-form-type: without these, Chrome's heuristics read a
+           bare text input next to a submit button as a contact field and offer to
+           autofill the user's email address into it — one careless "Add" away from
+           creating a device literally named after your email. -->
+      <input type="text" id="newDeviceName" name="deviceName" placeholder="Device name, e.g. Work Laptop"
+             autocomplete="off" autocorrect="off" spellcheck="false" data-form-type="other">
       <select id="newDevicePlatform">
         <option value="windows">Windows</option>
         <option value="mac">Mac</option>

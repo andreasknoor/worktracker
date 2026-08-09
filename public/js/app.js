@@ -1364,6 +1364,12 @@
 
   document.getElementById("devicesToggle").addEventListener("click", async () => {
     newApiKeyBox.style.display = "none";
+    // Chrome deliberately ignores autocomplete="off" on inputs its heuristics
+    // classify as contact fields, so the attribute alone doesn't stop it from
+    // autofilling an email address into the device-name box (verified: the
+    // attribute is present and :-webkit-autofill still matched). Clearing the
+    // value on open is heuristic-independent and always wins.
+    document.getElementById("newDeviceName").value = "";
     await refreshDevicesList();
     openModal(devicesOverlay);
   });
