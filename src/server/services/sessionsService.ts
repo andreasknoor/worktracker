@@ -8,13 +8,32 @@ import {
   splitByDay,
   type AttributedSession,
   type TimeZone,
+  type TrackingMode,
   type WorkSession,
   type WorkType,
 } from "@worktracker/core";
-import type { ActivityEventsRepository, Device, DevicesRepository } from "../repositories/types.js";
+import type { ActivityEventsRepository, DevicesRepository } from "../repositories/types.js";
+
+/**
+ * Sentinel "device id" for events whose real device was permanently deleted
+ * (`DevicesRepository.delete`) — their `device_id` is set to null rather
+ * than the rows being deleted (see `orphanEventsForDevice`), so this history
+ * still counts toward totals. The frontend already has a graceful fallback
+ * for an unrecognized device id (shows "Unknown device", neutral color), so
+ * no dashboard changes were needed to surface this.
+ */
+const ORPHANED_DEVICE_ID = "deleted-device";
+
+// The original device's own tuned idle/poll settings and tracking mode no
+// longer exist once it's deleted, so orphaned events fall back to the same
+// defaults a brand-new device starts with.
+const ORPHANED_IDLE_THRESHOLD_MINUTES = 30;
+const ORPHANED_POLL_INTERVAL_SECONDS = 30;
+const ORPHANED_TRACKING_MODE: TrackingMode = "auto";
 
 interface PerDeviceSessions {
-  device: Device;
+  deviceId: string;
+  trackingMode: TrackingMode;
   sessions: WorkSession[];
 }
 
@@ -24,7 +43,9 @@ interface PerDeviceSessions {
  * (see docs/IMPLEMENTATION_NOTES.md) — the shared first step behind every
  * function below, which differ only in how they filter/combine these
  * per-device lists afterwards. Revoked devices are still included: their
- * historical activity remains valid data.
+ * historical activity remains valid data. In the aggregated view (no
+ * `deviceId` filter), events orphaned by a permanently-deleted device (see
+ * `ORPHANED_DEVICE_ID`) are folded in too, using default settings.
  */
 async function getPerDeviceSessions(
   devicesRepo: DevicesRepository,
@@ -36,17 +57,37 @@ async function getPerDeviceSessions(
   const allDevices = await devicesRepo.list();
   const devices = deviceId ? allDevices.filter((d) => d.id === deviceId) : allDevices;
 
-  return Promise.all(
-    devices.map(async (device) => {
+  const perDevice = await Promise.all(
+    devices.map(async (device): Promise<PerDeviceSessions> => {
       const idleThresholdMs = device.idleThresholdMinutes * 60_000;
       const resumeConfirmationWindowMs = effectiveResumeConfirmationWindow(device.pollIntervalSeconds * 1000);
       const bufferedStartMs = bufferedRangeStart(startMs, idleThresholdMs);
 
       const timestamps = await eventsRepo.getEventsInRangeForDevice(device.id, bufferedStartMs, endExclusiveMs);
 
-      return { device, sessions: calculateSessions(timestamps, idleThresholdMs, resumeConfirmationWindowMs) };
+      return {
+        deviceId: device.id,
+        trackingMode: device.trackingMode,
+        sessions: calculateSessions(timestamps, idleThresholdMs, resumeConfirmationWindowMs),
+      };
     }),
   );
+
+  if (!deviceId) {
+    const idleThresholdMs = ORPHANED_IDLE_THRESHOLD_MINUTES * 60_000;
+    const resumeConfirmationWindowMs = effectiveResumeConfirmationWindow(ORPHANED_POLL_INTERVAL_SECONDS * 1000);
+    const bufferedStartMs = bufferedRangeStart(startMs, idleThresholdMs);
+    const timestamps = await eventsRepo.getOrphanedEventsInRange(bufferedStartMs, endExclusiveMs);
+    if (timestamps.length > 0) {
+      perDevice.push({
+        deviceId: ORPHANED_DEVICE_ID,
+        trackingMode: ORPHANED_TRACKING_MODE,
+        sessions: calculateSessions(timestamps, idleThresholdMs, resumeConfirmationWindowMs),
+      });
+    }
+  }
+
+  return perDevice;
 }
 
 /**
@@ -58,11 +99,11 @@ async function getPerDeviceSessions(
  * whole-day filter can't express.
  */
 function filterByWorkType(perDevice: readonly PerDeviceSessions[], timeZone: TimeZone, workType: WorkType): PerDeviceSessions[] {
-  return perDevice.map(({ device, sessions }) => {
+  return perDevice.map(({ deviceId, trackingMode, sessions }) => {
     const matching = splitByDay(sessions, timeZone)
-      .filter((slice) => classifyDay(slice.date, device.trackingMode) === workType)
+      .filter((slice) => classifyDay(slice.date, trackingMode) === workType)
       .map((slice): WorkSession => ({ start: slice.start, end: slice.end }));
-    return { device, sessions: matching };
+    return { deviceId, trackingMode, sessions: matching };
   });
 }
 
@@ -103,7 +144,7 @@ export async function getAttributedSessionsInRange(
   if (workType !== "all") {
     perDevice = filterByWorkType(perDevice, timeZone, workType);
   }
-  const sessionsByDevice = new Map(perDevice.map((d) => [d.device.id, d.sessions]));
+  const sessionsByDevice = new Map(perDevice.map((d) => [d.deviceId, d.sessions]));
   return mergeSessionsWithDeviceIds(sessionsByDevice);
 }
 

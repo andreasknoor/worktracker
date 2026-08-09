@@ -17,7 +17,7 @@ One row per tracker installation (one Windows laptop, one Mac laptop, etc.).
 | `tracking_mode` | text | `"auto"` (default) \| `"alwaysWork"` \| `"alwaysLeisure"` — overrides the default weekday=work/weekend=leisure classification for this device's logged time; see `API_CONTRACT.md`'s "Work/leisure filtering" |
 | `created_at` | timestamptz | |
 | `last_seen_at` | timestamptz, nullable | updated on each successful event ingest |
-| `revoked_at` | timestamptz, nullable | soft-revoke instead of deleting, so historical events keep a valid device reference |
+| `revoked_at` | timestamptz, nullable | soft-revoke (`DELETE /api/devices/{id}`) — key stops working, row and history stay intact. A device can additionally be hard-deleted (`?permanent=true`, only once already revoked) via `DevicesRepository.delete`; see `activity_events.device_id` below for what happens to its events. |
 
 ## `activity_events`
 
@@ -26,7 +26,7 @@ Raw activity timestamps only — never key content, window titles, or applicatio
 | Column | Type | Notes |
 |---|---|---|
 | `id` | bigserial PK | |
-| `device_id` | uuid/int FK → `devices.id` | |
+| `device_id` | uuid/int FK → `devices.id`, **nullable**, `ON DELETE SET NULL` | Null means the owning device was permanently deleted (see above) — the event row itself is never deleted, so historical hours keep counting, just without a device to attribute them to (`getOrphanedEventsInRange` in `sessionsService.ts`, folded into the aggregated view using default idle-threshold/poll-interval/`auto`-tracking-mode settings). |
 | `timestamp_utc` | timestamptz | when the input event occurred (client-observed time, sent as UTC) |
 | `created_at` | timestamptz | server insert time (for debugging/ops, not used in calculations) |
 

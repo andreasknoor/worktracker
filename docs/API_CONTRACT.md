@@ -154,6 +154,11 @@ Request: `{ "idleThresholdMinutes"?: number, "pollIntervalSeconds"?: number, "tr
 ### `DELETE /api/devices/{id}`
 Revokes the device's key (soft-revoke — see `DATA_MODEL.md`). `204` on success, `404` if the id isn't a valid uuid or doesn't match a device.
 
+### `DELETE /api/devices/{id}?permanent=true`
+Hard-deletes the device row itself, rather than soft-revoking it. Requires the device to already be revoked (`400` otherwise: `"Device must be revoked before it can be permanently deleted"`) — revoke first, delete only once you're sure; this is irreversible. `204` on success, `404` if the id isn't a valid uuid or doesn't match a device.
+
+The device's historical `activity_events` are **not** deleted — their `device_id` is set to `NULL` (`ON DELETE SET NULL`) instead, so past hours keep counting toward totals and the Timeline chart. These orphaned events show up with no device attribution (an empty/unmatched `deviceIds` entry in `week-timeline`, which the dashboard already renders as "Unknown device" in a neutral color — the same fallback path used for any unrecognized device id) and use default idle-threshold/poll-interval/`auto` tracking-mode settings for session calculation, since the original device's own tuning no longer exists anywhere. Once deleted, `?deviceId={id}` for that device returns `404` like any other unknown id.
+
 ## Per-device filtering
 
 All `/api/stats/*` endpoints accept an optional `?deviceId=` query param,

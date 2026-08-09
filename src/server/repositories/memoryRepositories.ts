@@ -70,10 +70,21 @@ export class InMemoryDevicesRepository implements DevicesRepository {
     this.devices.set(id, { ...device, revokedAt: atMs });
     return true;
   }
+
+  async restore(id: string): Promise<boolean> {
+    const device = this.devices.get(id);
+    if (!device || device.revokedAt === null) return false;
+    this.devices.set(id, { ...device, revokedAt: null });
+    return true;
+  }
+
+  async delete(id: string): Promise<boolean> {
+    return this.devices.delete(id);
+  }
 }
 
 export class InMemoryActivityEventsRepository implements ActivityEventsRepository {
-  private readonly events: { deviceId: string; timestampMs: number }[] = [];
+  private readonly events: { deviceId: string | null; timestampMs: number }[] = [];
 
   async insertEvents(deviceId: string, timestampsMs: readonly number[]): Promise<void> {
     for (const timestampMs of timestampsMs) {
@@ -92,6 +103,19 @@ export class InMemoryActivityEventsRepository implements ActivityEventsRepositor
     const scoped = deviceId ? this.events.filter((e) => e.deviceId === deviceId) : this.events;
     if (scoped.length === 0) return null;
     return Math.min(...scoped.map((e) => e.timestampMs));
+  }
+
+  async orphanEventsForDevice(deviceId: string): Promise<void> {
+    for (const event of this.events) {
+      if (event.deviceId === deviceId) event.deviceId = null;
+    }
+  }
+
+  async getOrphanedEventsInRange(startMs: number, endExclusiveMs: number): Promise<number[]> {
+    return this.events
+      .filter((e) => e.deviceId === null && e.timestampMs >= startMs && e.timestampMs < endExclusiveMs)
+      .map((e) => e.timestampMs)
+      .sort((a, b) => a - b);
   }
 }
 

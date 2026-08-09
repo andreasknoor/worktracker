@@ -33,7 +33,13 @@ CREATE UNIQUE INDEX devices_api_key_hash_idx ON devices (api_key_hash);
 
 CREATE TABLE activity_events (
   id            bigserial PRIMARY KEY,
-  device_id     uuid NOT NULL REFERENCES devices (id),
+  -- Nullable: permanently deleting a device (as opposed to soft-revoking it)
+  -- sets its events' device_id to NULL rather than deleting them, so
+  -- historical activity survives the device row itself. These "orphaned"
+  -- events still count toward the aggregated totals/timeline (see
+  -- getOrphanedEventsInRange in sessionsService.ts), just without a device
+  -- name/color to attribute them to.
+  device_id     uuid REFERENCES devices (id) ON DELETE SET NULL,
   timestamp_utc timestamptz NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now()
 );

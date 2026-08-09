@@ -604,6 +604,8 @@ table.data-table td.num, table.data-table th.num {
   color: white;
 }
 .btn:hover { opacity: 0.9; }
+.device-restore { color: var(--series-1); border-color: var(--series-1); }
+.device-delete-permanently { color: var(--danger-text); border-color: var(--danger-text); }
 
 .toast {
   position: fixed; bottom: 24px; left: 50%;

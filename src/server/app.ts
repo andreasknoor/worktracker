@@ -590,12 +590,49 @@ export function createApp(deps: AppDependencies): Hono {
     });
   });
 
+  // Undoes an accidental revoke. Works because revoking only sets
+  // `revoked_at` and never touches `api_key_hash` — so the device's
+  // existing API key resumes working immediately and the tracker needs no
+  // reconfiguration. Only a permanent delete is irreversible.
+  app.post("/api/devices/:id/restore", async (c) => {
+    const id = c.req.param("id");
+    if (!isUuid(id)) return c.json({ error: "Device not found" }, 404);
+
+    const restored = await deps.devices.restore(id);
+    if (!restored) {
+      const device = await deps.devices.getById(id);
+      if (!device) return c.json({ error: "Device not found" }, 404);
+      return c.json({ error: "Device is not revoked" }, 400);
+    }
+
+    return c.body(null, 204);
+  });
+
+  // `?permanent=true` hard-deletes the device row instead of soft-revoking
+  // it. Only allowed once the device is already revoked (a safety gate — a
+  // device actively sending data can't just vanish) and reversible up until
+  // that point: revoke first, actually delete only if you're sure. Its
+  // historical events survive (orphaned, not deleted) — see
+  // `orphanEventsForDevice`/`getOrphanedEventsInRange`.
   app.delete("/api/devices/:id", async (c) => {
     const id = c.req.param("id");
     if (!isUuid(id)) return c.json({ error: "Device not found" }, 404);
 
-    const revoked = await deps.devices.revoke(id, Date.now());
-    if (!revoked) return c.json({ error: "Device not found" }, 404);
+    if (c.req.query("permanent") !== "true") {
+      const revoked = await deps.devices.revoke(id, Date.now());
+      if (!revoked) return c.json({ error: "Device not found" }, 404);
+      return c.body(null, 204);
+    }
+
+    const device = await deps.devices.getById(id);
+    if (!device) return c.json({ error: "Device not found" }, 404);
+    if (device.revokedAt === null) {
+      return c.json({ error: "Device must be revoked before it can be permanently deleted" }, 400);
+    }
+
+    await deps.events.orphanEventsForDevice(id);
+    const deleted = await deps.devices.delete(id);
+    if (!deleted) return c.json({ error: "Device not found" }, 404);
     return c.body(null, 204);
   });
 

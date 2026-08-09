@@ -92,6 +92,18 @@ export class PostgresDevicesRepository implements DevicesRepository {
     ]);
     return (result.rowCount ?? 0) > 0;
   }
+
+  async restore(id: string): Promise<boolean> {
+    const result = await this.pool.query(`UPDATE devices SET revoked_at = NULL WHERE id = $1 AND revoked_at IS NOT NULL`, [
+      id,
+    ]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async delete(id: string): Promise<boolean> {
+    const result = await this.pool.query(`DELETE FROM devices WHERE id = $1`, [id]);
+    return (result.rowCount ?? 0) > 0;
+  }
 }
 
 // Keeps each INSERT well under Postgres's ~65535-bind-parameter limit
@@ -138,6 +150,20 @@ export class PostgresActivityEventsRepository implements ActivityEventsRepositor
     );
     const value = result.rows[0]?.timestamp_utc;
     return value ? value.getTime() : null;
+  }
+
+  async orphanEventsForDevice(deviceId: string): Promise<void> {
+    await this.pool.query(`UPDATE activity_events SET device_id = NULL WHERE device_id = $1`, [deviceId]);
+  }
+
+  async getOrphanedEventsInRange(startMs: number, endExclusiveMs: number): Promise<number[]> {
+    const result = await this.pool.query<{ timestamp_utc: Date }>(
+      `SELECT timestamp_utc FROM activity_events
+       WHERE device_id IS NULL AND timestamp_utc >= $1 AND timestamp_utc < $2
+       ORDER BY timestamp_utc ASC`,
+      [new Date(startMs), new Date(endExclusiveMs)],
+    );
+    return result.rows.map((r) => r.timestamp_utc.getTime());
   }
 }
 

@@ -133,6 +133,16 @@ swift test    # requires the full Xcode toolchain's XCTest.framework; if
   happens *before* merging (`splitByDay` then `classifyDay` per device, per
   calendar day) since a device left on `auto` can contribute both work and
   leisure time within the same query range.
+- **Two-step device deletion.** `DELETE /api/devices/:id` soft-revokes
+  (unchanged); `DELETE /api/devices/:id?permanent=true` hard-deletes the row,
+  but only once already revoked (a safety gate, not a data-integrity
+  requirement). `activity_events.device_id` is nullable with `ON DELETE SET
+  NULL` specifically so hard-deleting a device never has to touch its
+  historical events — they become "orphaned" (`getOrphanedEventsInRange`)
+  and keep counting in the aggregated view under default settings, since the
+  deleted device's own tuning is gone. This is why `getPerDeviceSessions` in
+  `sessionsService.ts` folds in a synthetic orphaned-events entry only when
+  there's no `?deviceId=` filter.
 
 ## Versioning
 

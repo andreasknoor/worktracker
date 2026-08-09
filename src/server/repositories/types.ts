@@ -35,10 +35,23 @@ export interface DevicesRepository {
   updateSettings(id: string, update: DeviceSettingsUpdate): Promise<Device | null>;
   touchLastSeen(id: string, atMs: number): Promise<void>;
   revoke(id: string, atMs: number): Promise<boolean>;
+  /**
+   * Undoes a `revoke` by clearing `revokedAt`. Safe because revoking only
+   * ever sets that one column — the API key hash is untouched, so the
+   * device's existing key starts working again immediately and the tracker
+   * needs no reconfiguration.
+   */
+  restore(id: string): Promise<boolean>;
+  /**
+   * Hard-deletes the device row itself (as opposed to `revoke`'s soft
+   * revoke). Callers must `orphanEventsForDevice` first — this does not
+   * touch `activity_events`.
+   */
+  delete(id: string): Promise<boolean>;
 }
 
 export interface ActivityEvent {
-  deviceId: string;
+  deviceId: string | null;
   timestampMs: number;
 }
 
@@ -48,6 +61,14 @@ export interface ActivityEventsRepository {
   getEventsInRangeForDevice(deviceId: string, startMs: number, endExclusiveMs: number): Promise<number[]>;
   /** The earliest recorded event, optionally scoped to one device, or null if none exist. */
   getFirstEventTimestamp(deviceId?: string): Promise<number | null>;
+  /**
+   * Detaches all of a device's events from it (`device_id` -> null) instead
+   * of deleting them, so a permanently-deleted device's historical activity
+   * survives the device row. Call before `DevicesRepository.delete`.
+   */
+  orphanEventsForDevice(deviceId: string): Promise<void>;
+  /** Events with no device (see `orphanEventsForDevice`) in `[startMs, endExclusiveMs)`. */
+  getOrphanedEventsInRange(startMs: number, endExclusiveMs: number): Promise<number[]>;
 }
 
 export interface GlobalSettings {

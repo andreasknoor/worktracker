@@ -149,6 +149,76 @@ describe("Device management", () => {
     expect(list[0].revoked).toBe(true);
   });
 
+  it("restores a revoked device, and its existing API key works again", async () => {
+    const created = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "A", platform: "mac" }),
+      })
+    ).json();
+
+    await authed(ctx, `/api/devices/${created.id}`, { method: "DELETE" });
+
+    // While revoked, the key is rejected.
+    const whileRevoked = await ctx.app.request("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${created.apiKey}` },
+      body: JSON.stringify({ timestamp: new Date().toISOString() }),
+    });
+    expect(whileRevoked.status).toBe(401);
+
+    const restoreResponse = await authed(ctx, `/api/devices/${created.id}/restore`, { method: "POST" });
+    expect(restoreResponse.status).toBe(204);
+
+    const list = await (await authed(ctx, "/api/devices")).json();
+    expect(list[0].revoked).toBe(false);
+
+    // Revoking never touched api_key_hash, so the original key resumes
+    // working — no tracker reconfiguration needed.
+    const afterRestore = await ctx.app.request("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${created.apiKey}` },
+      body: JSON.stringify({ timestamp: new Date().toISOString() }),
+    });
+    expect(afterRestore.status).toBe(201);
+  });
+
+  it("rejects restoring a device that is not revoked", async () => {
+    const created = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "A", platform: "mac" }),
+      })
+    ).json();
+
+    const response = await authed(ctx, `/api/devices/${created.id}/restore`, { method: "POST" });
+    expect(response.status).toBe(400);
+  });
+
+  it("returns 404 when restoring an unknown or malformed device id", async () => {
+    const unknown = await authed(ctx, "/api/devices/00000000-0000-0000-0000-000000000000/restore", { method: "POST" });
+    expect(unknown.status).toBe(404);
+
+    const malformed = await authed(ctx, "/api/devices/not-a-uuid/restore", { method: "POST" });
+    expect(malformed.status).toBe(404);
+  });
+
+  it("rejects restore without a valid session cookie", async () => {
+    const created = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "A", platform: "mac" }),
+      })
+    ).json();
+    await authed(ctx, `/api/devices/${created.id}`, { method: "DELETE" });
+
+    const response = await ctx.app.request(`/api/devices/${created.id}/restore`, { method: "POST" });
+    expect(response.status).toBe(401);
+  });
+
   // Regression test: a path-prefix pattern without a slash before the
   // wildcard ("/api/devices*") only matches the exact base path in Hono, not
   // sub-paths — which let PATCH/DELETE to /api/devices/:id run
@@ -315,6 +385,128 @@ describe("Device tracking mode (?workType= classification override)", () => {
     });
     const updated = await response.json();
     expect(updated.trackingMode).toBe("alwaysLeisure");
+  });
+});
+
+describe("Permanent device deletion (DELETE ?permanent=true)", () => {
+  let ctx: TestContext;
+
+  beforeEach(async () => {
+    ctx = await setUp();
+  });
+
+  it("rejects a permanent delete of a device that hasn't been revoked yet", async () => {
+    const created = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Laptop", platform: "mac" }),
+      })
+    ).json();
+
+    const response = await authed(ctx, `/api/devices/${created.id}?permanent=true`, { method: "DELETE" });
+    expect(response.status).toBe(400);
+
+    const list = await (await authed(ctx, "/api/devices")).json();
+    expect(list).toHaveLength(1); // still there
+  });
+
+  it("permanently deletes an already-revoked device, removing it from the list entirely", async () => {
+    const created = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Laptop", platform: "mac" }),
+      })
+    ).json();
+    await authed(ctx, `/api/devices/${created.id}`, { method: "DELETE" }); // revoke first
+
+    const response = await authed(ctx, `/api/devices/${created.id}?permanent=true`, { method: "DELETE" });
+    expect(response.status).toBe(204);
+
+    const list = await (await authed(ctx, "/api/devices")).json();
+    expect(list).toHaveLength(0); // gone, not just marked revoked
+  });
+
+  it("returns 404 for a permanent delete of an unknown device id", async () => {
+    const response = await authed(ctx, "/api/devices/00000000-0000-0000-0000-000000000000?permanent=true", {
+      method: "DELETE",
+    });
+    expect(response.status).toBe(404);
+  });
+
+  it("keeps the device's historical hours in the aggregated total after permanent deletion", async () => {
+    const created = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Laptop", platform: "mac" }),
+      })
+    ).json();
+
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const timestamps: number[] = [];
+    for (let m = 0; m <= 60; m += 10) timestamps.push(today.getTime() + 9 * 60 * MINUTE + m * MINUTE);
+    await ctx.app.request("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${created.apiKey}` },
+      body: JSON.stringify({ timestamps: timestamps.map((t) => new Date(t).toISOString()) }),
+    });
+
+    const before = await (await authed(ctx, "/api/stats/summary?days=1")).json();
+    expect(before.totalHours).toBeGreaterThan(0);
+
+    await authed(ctx, `/api/devices/${created.id}`, { method: "DELETE" }); // revoke
+    const deleteResponse = await authed(ctx, `/api/devices/${created.id}?permanent=true`, { method: "DELETE" });
+    expect(deleteResponse.status).toBe(204);
+
+    const after = await (await authed(ctx, "/api/stats/summary?days=1")).json();
+    expect(after.totalHours).toBeCloseTo(before.totalHours, 5);
+  });
+
+  it("orphaned events are attributed in week-timeline but not to any known device", async () => {
+    const monday = Date.UTC(2026, 2, 9); // a Monday
+    const created = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Laptop", platform: "mac" }),
+      })
+    ).json();
+    await ctx.app.request("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${created.apiKey}` },
+      body: JSON.stringify({
+        timestamps: [0, 20, 40].map((m) => new Date(monday + 9 * 60 * MINUTE + m * MINUTE).toISOString()),
+      }),
+    });
+
+    await authed(ctx, `/api/devices/${created.id}`, { method: "DELETE" });
+    await authed(ctx, `/api/devices/${created.id}?permanent=true`, { method: "DELETE" });
+
+    const response = await authed(ctx, "/api/stats/week-timeline?start=2026-03-09");
+    const timeline = await response.json();
+    const mondaySegments = timeline.days.find((d: { date: string }) => d.date === "2026-03-09").segments;
+
+    expect(mondaySegments).toHaveLength(1);
+    expect(mondaySegments[0].deviceIds).toHaveLength(1);
+    expect(mondaySegments[0].deviceIds[0]).not.toBe(created.id); // device is gone, not attributed to it
+  });
+
+  it("scoping to the now-deleted device's id returns 404 (it's no longer a known device)", async () => {
+    const created = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Laptop", platform: "mac" }),
+      })
+    ).json();
+    await authed(ctx, `/api/devices/${created.id}`, { method: "DELETE" });
+    await authed(ctx, `/api/devices/${created.id}?permanent=true`, { method: "DELETE" });
+
+    const response = await authed(ctx, `/api/stats/summary?days=1&deviceId=${created.id}`);
+    expect(response.status).toBe(404);
   });
 });
 

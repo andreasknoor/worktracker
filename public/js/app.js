@@ -1157,6 +1157,16 @@
     if (!response.ok) throw new Error("Failed to revoke device (" + response.status + ")");
   }
 
+  async function deleteDevicePermanently(id) {
+    const response = await fetch("/api/devices/" + encodeURIComponent(id) + "?permanent=true", { method: "DELETE" });
+    if (!response.ok) throw new Error("Failed to permanently delete device (" + response.status + ")");
+  }
+
+  async function restoreDevice(id) {
+    const response = await fetch("/api/devices/" + encodeURIComponent(id) + "/restore", { method: "POST" });
+    if (!response.ok) throw new Error("Failed to restore device (" + response.status + ")");
+  }
+
   const devicesOverlay = document.getElementById("devicesOverlay");
   const devicesList = document.getElementById("devicesList");
   const newApiKeyBox = document.getElementById("newApiKeyBox");
@@ -1256,6 +1266,32 @@
     modeRow.appendChild(modeLabel);
     row.appendChild(modeRow);
 
+    // Permanent deletion is only offered once a device is already revoked —
+    // a safety gate against removing a device that's still actively
+    // sending data, and a natural fit for the UI: a revoked row otherwise
+    // has no actions of its own at all.
+    let deleteBtn = null;
+    let restoreBtn = null;
+    if (device.revoked) {
+      const revokedActionsRow = document.createElement("div");
+      revokedActionsRow.className = "field-row";
+
+      // Revoking is reversible (it only sets revoked_at; the API key hash is
+      // untouched, so the device's existing key works again immediately).
+      // Offered first, so the recoverable action reads before the permanent one.
+      restoreBtn = document.createElement("button");
+      restoreBtn.className = "btn device-restore";
+      restoreBtn.textContent = "Restore";
+      revokedActionsRow.appendChild(restoreBtn);
+
+      deleteBtn = document.createElement("button");
+      deleteBtn.className = "btn device-delete-permanently";
+      deleteBtn.textContent = "Delete permanently";
+      revokedActionsRow.appendChild(deleteBtn);
+
+      row.appendChild(revokedActionsRow);
+    }
+
     if (saveBtn) {
       saveBtn.addEventListener("click", async () => {
         try {
@@ -1277,6 +1313,34 @@
           showToast("Device revoked");
         } catch (err) {
           showToast("Could not revoke device", true);
+        }
+      });
+    }
+    if (restoreBtn) {
+      restoreBtn.addEventListener("click", async () => {
+        try {
+          await restoreDevice(device.id);
+          await refreshDevicesList();
+          await refreshDeviceFilterDropdown();
+          showToast("Device restored");
+        } catch (err) {
+          showToast("Could not restore device", true);
+        }
+      });
+    }
+    if (deleteBtn) {
+      deleteBtn.addEventListener("click", async () => {
+        const confirmed = confirm(
+          "Permanently delete \"" + device.name + "\"? This cannot be undone. " +
+          "Its historical hours stay in your totals, but without a device name attached.",
+        );
+        if (!confirmed) return;
+        try {
+          await deleteDevicePermanently(device.id);
+          await refreshDevicesList();
+          showToast("Device permanently deleted");
+        } catch (err) {
+          showToast("Could not delete device", true);
         }
       });
     }
