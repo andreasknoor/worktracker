@@ -49,6 +49,7 @@
     --overlap:        #898781;
     --success-text:   #0ca30c;
     --danger-text:    #e66767;
+    --status-warning: #ffb84d;
   }
 }
 :root[data-theme="dark"] {
@@ -73,6 +74,7 @@
   --overlap:        #898781;
   --success-text:   #0ca30c;
   --danger-text:    #e66767;
+  --status-warning: #ffb84d;
 }
 
 * { box-sizing: border-box; }
@@ -132,6 +134,32 @@ header.app-header .subtitle {
 }
 .icon-btn:hover { background: var(--gridline); }
 .icon-btn svg { width: 18px; height: 18px; }
+
+/* Device health banner: warns when a device has gone quiet (or never
+   checked in), so a silently-broken tracker (dead server URL, revoked key,
+   crashed process) is visible instead of just reading as "no activity". */
+.device-health-banner {
+  display: none;
+  align-items: flex-start;
+  gap: 10px;
+  background: color-mix(in srgb, var(--status-warning) 14%, var(--surface-1));
+  border: 1px solid color-mix(in srgb, var(--status-warning) 45%, var(--border));
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+.device-health-banner.visible { display: flex; }
+.device-health-banner .icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: var(--status-warning);
+}
+.device-health-banner strong { font-weight: 600; }
 
 /* Live timer: progress ring (today vs. 8h goal) + current session */
 .live-ring-bar {

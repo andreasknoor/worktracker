@@ -1398,6 +1398,54 @@
     }
   });
 
+  /* ---------- Device health banner ---------- */
+
+  // A device that's gone this quiet almost certainly isn't just idle — idle
+  // gaps close within the idle threshold (minutes), not hours. 24h is
+  // deliberately generous so a normal evening/weekend away from the
+  // computer never triggers it; the goal is catching real breakage (dead
+  // server URL, revoked key, crashed tracker process) within the same day,
+  // not flagging every quiet night.
+  const DEVICE_STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+  function formatRelativeTime(ms) {
+    const minutes = Math.floor(ms / 60000);
+    if (minutes < 60) return minutes + "m";
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return hours + "h";
+    return Math.floor(hours / 24) + "d";
+  }
+
+  function updateDeviceHealthBanner(devices) {
+    const banner = document.getElementById("deviceHealthBanner");
+    const textEl = document.getElementById("deviceHealthBannerText");
+    const now = Date.now();
+
+    const warnings = devices
+      .filter(d => !d.revoked)
+      .map(d => {
+        if (!d.lastSeenAt) {
+          return d.name + " has never sent data — check its server URL and API key.";
+        }
+        const elapsed = now - new Date(d.lastSeenAt).getTime();
+        if (elapsed > DEVICE_STALE_THRESHOLD_MS) {
+          return d.name + " hasn't checked in for " + formatRelativeTime(elapsed) + ".";
+        }
+        return null;
+      })
+      .filter(Boolean);
+
+    if (warnings.length === 0) {
+      banner.classList.remove("visible");
+      return;
+    }
+
+    textEl.textContent = warnings.length === 1
+      ? warnings[0]
+      : warnings.length + " devices need attention: " + warnings.join(" ");
+    banner.classList.add("visible");
+  }
+
   /* ---------- Wiring: device filter dropdown (header) ---------- */
 
   const deviceFilterSelect = document.getElementById("deviceFilter");
@@ -1410,6 +1458,8 @@
       console.error(err);
       return;
     }
+
+    updateDeviceHealthBanner(devices);
 
     const stillExists = devices.some(d => d.id === state.selectedDeviceId);
     if (state.selectedDeviceId && !stillExists) {
@@ -1640,6 +1690,11 @@
       syncLive();
       setInterval(tickLive, 1000);
       setInterval(syncLive, 15000);
+      // Staleness is purely time-based (no new data needed to detect it), so
+      // this recomputes from the already-fetched device list rather than
+      // polling the API again — refreshDeviceFilterDropdown()'s own periodic
+      // (device-add/revoke-triggered) fetches keep devicesCache fresh enough.
+      setInterval(() => updateDeviceHealthBanner(devicesCache), 5 * 60 * 1000);
 
       fetchFirstActivity()
         .then(data => { state.firstActivityDate = data.date ? parseIsoDate(data.date) : null; })
