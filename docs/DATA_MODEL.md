@@ -42,6 +42,7 @@ Global key/value store, same shape as the original SQLite `Settings` table — s
 | `PollIntervalSeconds` | number | `30` | how often trackers poll for new input |
 | `CoreHoursStart` | `"HH:mm"` string | `"09:00"` | highlighted band start in the timeline chart |
 | `CoreHoursEnd` | `"HH:mm"` string | `"18:00"` | highlighted band end in the timeline chart |
+| `DeviceStaleThresholdHours` | number | `24` | hours since a device's `lastSeenAt` before the dashboard's health banner warns about it |
 
 Note: `StartWithWindows` and `TrackerExePath` from the original schema were tracker-local concerns (Windows registry autostart, tracked via the dashboard talking to the same local machine). In the client/server model, autostart is configured locally per tracker installation (each OS's own mechanism) and is no longer something the server needs to store or broker — the dashboard no longer has a way to reach into a specific device's OS to toggle it. If per-device autostart status still needs to be visible in the dashboard, model it as a per-device field (e.g. `devices.autostart_enabled`, reported by the tracker itself), not a global setting.
 

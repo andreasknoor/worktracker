@@ -94,7 +94,8 @@ preferences remain global.
 ```json
 {
   "coreHoursStart": "09:00",
-  "coreHoursEnd": "18:00"
+  "coreHoursEnd": "18:00",
+  "deviceStaleThresholdHours": 24
 }
 ```
 
@@ -102,6 +103,7 @@ preferences remain global.
 Request body same shape as the `GET` response. Validation:
 - `coreHoursStart`/`coreHoursEnd` must parse as `HH:mm`, else `400`.
 - `coreHoursEnd` must be strictly after `coreHoursStart`, else `400`.
+- `deviceStaleThresholdHours` must be a positive number, else `400`.
 - A malformed JSON body returns `400` rather than a raw parse error.
 
 Returns the saved settings (same shape as `GET`).

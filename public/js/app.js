@@ -103,6 +103,7 @@
     monthOffset: 0,       // 0 = current calendar month, -1 = previous month, etc.
     coreHoursStartMinutes: 9 * 60,  // refreshed from settings; used by the timeline chart
     coreHoursEndMinutes: 18 * 60,
+    deviceStaleThresholdHours: 24,  // refreshed from settings; used by the device health banner
     selectedDeviceId: safeGetItem(DEVICE_STORAGE_KEY) || "", // "" = all devices combined
     timelineCoreHoursOnly: safeGetItem(CORE_HOURS_ONLY_STORAGE_KEY) === "1", // crop the timeline y-axis to core hours ± 1h
     dayType: safeGetItem(DAY_TYPE_STORAGE_KEY) || "all", // "all" | "weekday" | "weekend"
@@ -1050,6 +1051,7 @@
   const overlay = document.getElementById("settingsOverlay");
   const coreHoursStartInput = document.getElementById("coreHoursStart");
   const coreHoursEndInput = document.getElementById("coreHoursEnd");
+  const deviceStaleThresholdHoursInput = document.getElementById("deviceStaleThresholdHours");
   const toast = document.getElementById("toast");
 
   function showToast(message, isError) {
@@ -1064,6 +1066,7 @@
       const settings = await fetchSettings();
       coreHoursStartInput.value = settings.coreHoursStart;
       coreHoursEndInput.value = settings.coreHoursEnd;
+      deviceStaleThresholdHoursInput.value = settings.deviceStaleThresholdHours;
       openModal(overlay);
     } catch (err) {
       showToast("Could not load settings", true);
@@ -1078,17 +1081,25 @@
       showToast("Core hours end must be after start", true);
       return;
     }
+    const staleThresholdHours = Number(deviceStaleThresholdHoursInput.value);
+    if (!Number.isFinite(staleThresholdHours) || staleThresholdHours <= 0) {
+      showToast("Device stale warning must be a positive number of hours", true);
+      return;
+    }
 
     try {
       const saved = await saveSettings({
         coreHoursStart: coreHoursStartInput.value,
         coreHoursEnd: coreHoursEndInput.value,
+        deviceStaleThresholdHours: staleThresholdHours,
       });
       state.coreHoursStartMinutes = parseHHMMToMinutes(saved.coreHoursStart);
       state.coreHoursEndMinutes = parseHHMMToMinutes(saved.coreHoursEnd);
+      state.deviceStaleThresholdHours = saved.deviceStaleThresholdHours;
       closeModal(overlay);
       showToast("Settings saved");
       renderAll();
+      updateDeviceHealthBanner(devicesCache);
     } catch (err) {
       showToast("Could not save settings", true);
     }
@@ -1401,12 +1412,39 @@
   /* ---------- Device health banner ---------- */
 
   // A device that's gone this quiet almost certainly isn't just idle — idle
-  // gaps close within the idle threshold (minutes), not hours. 24h is
-  // deliberately generous so a normal evening/weekend away from the
+  // gaps close within the idle threshold (minutes), not hours. The default
+  // 24h (configurable in Dashboard settings, state.deviceStaleThresholdHours)
+  // is deliberately generous so a normal evening/weekend away from the
   // computer never triggers it; the goal is catching real breakage (dead
   // server URL, revoked key, crashed tracker process) within the same day,
   // not flagging every quiet night.
-  const DEVICE_STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+  const DEVICE_HEALTH_SNOOZE_STORAGE_KEY = "wtk_device_health_snoozed_until";
+
+  // Per-device snooze, keyed by device id -> epoch ms the snooze expires.
+  // Deliberately per-device (not one mute for the whole banner) so silencing
+  // a known-offline device doesn't also hide a genuinely new problem on
+  // another device. Browser-local by design — same tradeoff as the device
+  // filter / timeline toggle: no server round-trip, but doesn't follow you
+  // to a different browser.
+  function getDeviceHealthSnoozeMap() {
+    try {
+      return JSON.parse(safeGetItem(DEVICE_HEALTH_SNOOZE_STORAGE_KEY) || "{}");
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function isDeviceHealthSnoozed(deviceId) {
+    const until = getDeviceHealthSnoozeMap()[deviceId];
+    return typeof until === "number" && until > Date.now();
+  }
+
+  function snoozeDeviceHealthWarning(deviceId, days) {
+    const map = getDeviceHealthSnoozeMap();
+    map[deviceId] = Date.now() + days * 24 * 60 * 60 * 1000;
+    safeSetItem(DEVICE_HEALTH_SNOOZE_STORAGE_KEY, JSON.stringify(map));
+  }
 
   function formatRelativeTime(ms) {
     const minutes = Math.floor(ms / 60000);
@@ -1416,33 +1454,76 @@
     return Math.floor(hours / 24) + "d";
   }
 
+  function buildDeviceHealthRow(device, message) {
+    const row = document.createElement("div");
+    row.className = "device-health-row";
+
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("class", "icon");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("fill", "none");
+    icon.setAttribute("stroke", "currentColor");
+    icon.setAttribute("stroke-width", "2");
+    icon.setAttribute("stroke-linecap", "round");
+    icon.setAttribute("stroke-linejoin", "round");
+    icon.innerHTML =
+      '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"></path><path d="M12 9v4M12 17h.01"></path>';
+    row.appendChild(icon);
+
+    // device.name is arbitrary user input — via textContent, not innerHTML,
+    // same XSS-avoidance rule as the devices panel's rows.
+    const textEl = document.createElement("div");
+    textEl.className = "device-health-row-text";
+    textEl.textContent = message;
+    row.appendChild(textEl);
+
+    const actions = document.createElement("div");
+    actions.className = "device-health-row-actions";
+    [
+      { label: "Snooze 1 day", days: 1 },
+      { label: "Snooze 5 days", days: 5 },
+    ].forEach(({ label, days }) => {
+      const btn = document.createElement("button");
+      btn.className = "btn device-health-snooze";
+      btn.textContent = label;
+      btn.addEventListener("click", () => {
+        snoozeDeviceHealthWarning(device.id, days);
+        updateDeviceHealthBanner(devicesCache);
+      });
+      actions.appendChild(btn);
+    });
+    row.appendChild(actions);
+
+    return row;
+  }
+
   function updateDeviceHealthBanner(devices) {
     const banner = document.getElementById("deviceHealthBanner");
-    const textEl = document.getElementById("deviceHealthBannerText");
+    const list = document.getElementById("deviceHealthBannerList");
     const now = Date.now();
+    const thresholdMs = state.deviceStaleThresholdHours * 60 * 60 * 1000;
 
     const warnings = devices
-      .filter(d => !d.revoked)
+      .filter(d => !d.revoked && !isDeviceHealthSnoozed(d.id))
       .map(d => {
         if (!d.lastSeenAt) {
-          return d.name + " has never sent data — check its server URL and API key.";
+          return { device: d, message: d.name + " has never sent data — check its server URL and API key." };
         }
         const elapsed = now - new Date(d.lastSeenAt).getTime();
-        if (elapsed > DEVICE_STALE_THRESHOLD_MS) {
-          return d.name + " hasn't checked in for " + formatRelativeTime(elapsed) + ".";
+        if (elapsed > thresholdMs) {
+          return { device: d, message: d.name + " hasn't checked in for " + formatRelativeTime(elapsed) + "." };
         }
         return null;
       })
       .filter(Boolean);
 
+    list.innerHTML = "";
     if (warnings.length === 0) {
       banner.classList.remove("visible");
       return;
     }
 
-    textEl.textContent = warnings.length === 1
-      ? warnings[0]
-      : warnings.length + " devices need attention: " + warnings.join(" ");
+    warnings.forEach(({ device, message }) => list.appendChild(buildDeviceHealthRow(device, message)));
     banner.classList.add("visible");
   }
 
@@ -1704,6 +1785,11 @@
         .then(settings => {
           state.coreHoursStartMinutes = parseHHMMToMinutes(settings.coreHoursStart);
           state.coreHoursEndMinutes = parseHHMMToMinutes(settings.coreHoursEnd);
+          state.deviceStaleThresholdHours = settings.deviceStaleThresholdHours;
+          // The banner may already have rendered once using the built-in
+          // default (24h) before this resolved — recompute now in case the
+          // saved threshold differs.
+          updateDeviceHealthBanner(devicesCache);
         })
         .catch(err => console.error(err));
 

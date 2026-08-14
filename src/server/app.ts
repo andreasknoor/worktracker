@@ -494,8 +494,8 @@ export function createApp(deps: AppDependencies): Hono {
 
   app.put("/api/settings/", async (c) => {
     const body = await c.req
-      .json<{ coreHoursStart?: string; coreHoursEnd?: string }>()
-      .catch(() => ({ coreHoursStart: undefined, coreHoursEnd: undefined }));
+      .json<{ coreHoursStart?: string; coreHoursEnd?: string; deviceStaleThresholdHours?: number }>()
+      .catch(() => ({ coreHoursStart: undefined, coreHoursEnd: undefined, deviceStaleThresholdHours: undefined }));
     const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
 
     if (!body.coreHoursStart || !timePattern.test(body.coreHoursStart)) {
@@ -507,10 +507,14 @@ export function createApp(deps: AppDependencies): Hono {
     if (body.coreHoursEnd <= body.coreHoursStart) {
       return c.json({ error: "coreHoursEnd must be strictly after coreHoursStart" }, 400);
     }
+    if (!Number.isFinite(body.deviceStaleThresholdHours) || (body.deviceStaleThresholdHours as number) <= 0) {
+      return c.json({ error: "deviceStaleThresholdHours must be a positive number" }, 400);
+    }
 
     const saved = await deps.settings.save({
       coreHoursStart: body.coreHoursStart,
       coreHoursEnd: body.coreHoursEnd,
+      deviceStaleThresholdHours: body.deviceStaleThresholdHours as number,
     });
     return c.json(saved);
   });

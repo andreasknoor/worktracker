@@ -140,8 +140,6 @@ header.app-header .subtitle {
    crashed process) is visible instead of just reading as "no activity". */
 .device-health-banner {
   display: none;
-  align-items: flex-start;
-  gap: 10px;
   background: color-mix(in srgb, var(--status-warning) 14%, var(--surface-1));
   border: 1px solid color-mix(in srgb, var(--status-warning) 45%, var(--border));
   border-radius: 12px;
@@ -151,15 +149,31 @@ header.app-header .subtitle {
   line-height: 1.5;
   color: var(--text-primary);
 }
-.device-health-banner.visible { display: flex; }
-.device-health-banner .icon {
+.device-health-banner.visible { display: block; }
+.device-health-banner-list { display: flex; flex-direction: column; gap: 10px; }
+.device-health-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.device-health-row + .device-health-row {
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--status-warning) 30%, transparent);
+}
+.device-health-row .icon {
   flex: none;
   width: 18px;
   height: 18px;
-  margin-top: 1px;
   color: var(--status-warning);
 }
-.device-health-banner strong { font-weight: 600; }
+.device-health-row-text { flex: 1 1 240px; }
+.device-health-row-actions { display: flex; gap: 6px; flex: none; }
+.device-health-snooze {
+  font-size: 12px;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
 
 /* Live timer: progress ring (today vs. 8h goal) + current session */
 .live-ring-bar {

@@ -173,17 +173,21 @@ export class PostgresSettingsRepository implements SettingsRepository {
   async get(): Promise<GlobalSettings> {
     const result = await this.pool.query<{ key: string; value: string }>(`SELECT key, value FROM settings`);
     const stored = Object.fromEntries(result.rows.map((r) => [r.key, r.value]));
+    const staleThreshold = Number(stored["DeviceStaleThresholdHours"]);
     return {
       coreHoursStart: stored["CoreHoursStart"] ?? DEFAULT_GLOBAL_SETTINGS.coreHoursStart,
       coreHoursEnd: stored["CoreHoursEnd"] ?? DEFAULT_GLOBAL_SETTINGS.coreHoursEnd,
+      deviceStaleThresholdHours: Number.isFinite(staleThreshold) && staleThreshold > 0
+        ? staleThreshold
+        : DEFAULT_GLOBAL_SETTINGS.deviceStaleThresholdHours,
     };
   }
 
   async save(settings: GlobalSettings): Promise<GlobalSettings> {
     await this.pool.query(
-      `INSERT INTO settings (key, value) VALUES ('CoreHoursStart', $1), ('CoreHoursEnd', $2)
+      `INSERT INTO settings (key, value) VALUES ('CoreHoursStart', $1), ('CoreHoursEnd', $2), ('DeviceStaleThresholdHours', $3)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-      [settings.coreHoursStart, settings.coreHoursEnd],
+      [settings.coreHoursStart, settings.coreHoursEnd, String(settings.deviceStaleThresholdHours)],
     );
     return settings;
   }

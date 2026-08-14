@@ -74,11 +74,14 @@ export interface ActivityEventsRepository {
 export interface GlobalSettings {
   coreHoursStart: string; // "HH:mm"
   coreHoursEnd: string; // "HH:mm"
+  /** Hours since a device's `lastSeenAt` before the dashboard's health banner warns about it. */
+  deviceStaleThresholdHours: number;
 }
 
 export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
   coreHoursStart: "09:00",
   coreHoursEnd: "18:00",
+  deviceStaleThresholdHours: 24,
 };
 
 export interface SettingsRepository {
