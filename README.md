@@ -4,6 +4,8 @@ A personal work-time tracker: lightweight desktop trackers record keyboard/mouse
 activity timestamps only (never key content or window titles), a Node.js/TypeScript
 server turns those timestamps into work sessions, and a dashboard visualizes them.
 
+![WorkTracker dashboard](docs/images/dashboard-screenshot.png)
+
 ## Architecture
 
 ```
