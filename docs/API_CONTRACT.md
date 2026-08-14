@@ -90,7 +90,7 @@ multiple devices exist; autostart is now a purely local, per-OS tracker
 concern with no server-side representation). Only dashboard-display
 preferences remain global.
 
-### `GET /api/settings/`
+### `GET /api/settings`
 ```json
 {
   "coreHoursStart": "09:00",
@@ -99,7 +99,13 @@ preferences remain global.
 }
 ```
 
-### `PUT /api/settings/`
+No trailing slash — the original `.NET` reference implementation's ASP.NET
+Core convention was `/api/settings/`, but on Vercel a path with a trailing
+slash doesn't match the `/api/:path*` rewrite's compiled regex (Vercel
+requires each path segment to be non-empty), so it 404s before ever
+reaching the app. See `docs/IMPLEMENTATION_NOTES.md`.
+
+### `PUT /api/settings`
 Request body same shape as the `GET` response. Validation:
 - `coreHoursStart`/`coreHoursEnd` must parse as `HH:mm`, else `400`.
 - `coreHoursEnd` must be strictly after `coreHoursStart`, else `400`.
@@ -234,6 +240,6 @@ work/leisure slice.
   (Vercel sets this on every deployment); local dev over plain HTTP needs
   it unset or the browser silently drops the cookie.
 - Unhandled route errors (and malformed JSON bodies on `PUT
-  /api/settings/`, `POST /api/devices`, `POST /api/events`) return a
+  /api/settings`, `POST /api/devices`, `POST /api/events`) return a
   generic `{ "error": "..." }` JSON response instead of throwing, so no
   route can 500 with an unstructured body.

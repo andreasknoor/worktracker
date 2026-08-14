@@ -487,12 +487,12 @@ export function createApp(deps: AppDependencies): Hono {
 
   // ---------- Settings (global, dashboard-display only) ----------
 
-  app.get("/api/settings/", async (c) => {
+  app.get("/api/settings", async (c) => {
     const settings = await deps.settings.get();
     return c.json(settings);
   });
 
-  app.put("/api/settings/", async (c) => {
+  app.put("/api/settings", async (c) => {
     const body = await c.req
       .json<{ coreHoursStart?: string; coreHoursEnd?: string; deviceStaleThresholdHours?: number }>()
       .catch(() => ({ coreHoursStart: undefined, coreHoursEnd: undefined, deviceStaleThresholdHours: undefined }));

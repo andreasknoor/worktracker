@@ -655,7 +655,7 @@ describe("Settings validation", () => {
   });
 
   it("rejects coreHoursEnd that is not strictly after coreHoursStart", async () => {
-    const response = await authed(ctx, "/api/settings/", {
+    const response = await authed(ctx, "/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ coreHoursStart: "18:00", coreHoursEnd: "09:00", deviceStaleThresholdHours: 24 }),
@@ -664,7 +664,7 @@ describe("Settings validation", () => {
   });
 
   it("rejects malformed HH:mm values", async () => {
-    const response = await authed(ctx, "/api/settings/", {
+    const response = await authed(ctx, "/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ coreHoursStart: "9am", coreHoursEnd: "18:00", deviceStaleThresholdHours: 24 }),
@@ -673,7 +673,7 @@ describe("Settings validation", () => {
   });
 
   it("rejects a non-positive deviceStaleThresholdHours", async () => {
-    const response = await authed(ctx, "/api/settings/", {
+    const response = await authed(ctx, "/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ coreHoursStart: "09:00", coreHoursEnd: "18:00", deviceStaleThresholdHours: 0 }),
@@ -682,7 +682,7 @@ describe("Settings validation", () => {
   });
 
   it("rejects a missing deviceStaleThresholdHours", async () => {
-    const response = await authed(ctx, "/api/settings/", {
+    const response = await authed(ctx, "/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ coreHoursStart: "09:00", coreHoursEnd: "18:00" }),
@@ -691,14 +691,14 @@ describe("Settings validation", () => {
   });
 
   it("saves and round-trips valid core hours and device-stale threshold", async () => {
-    const putResponse = await authed(ctx, "/api/settings/", {
+    const putResponse = await authed(ctx, "/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ coreHoursStart: "08:30", coreHoursEnd: "16:45", deviceStaleThresholdHours: 6 }),
     });
     expect(putResponse.status).toBe(200);
 
-    const getResponse = await authed(ctx, "/api/settings/");
+    const getResponse = await authed(ctx, "/api/settings");
     const settings = await getResponse.json();
     expect(settings.coreHoursStart).toBe("08:30");
     expect(settings.coreHoursEnd).toBe("16:45");
@@ -706,13 +706,13 @@ describe("Settings validation", () => {
   });
 
   it("defaults deviceStaleThresholdHours to 24 when nothing has been saved", async () => {
-    const response = await authed(ctx, "/api/settings/");
+    const response = await authed(ctx, "/api/settings");
     const settings = await response.json();
     expect(settings.deviceStaleThresholdHours).toBe(24);
   });
 
   it("returns 400 instead of throwing on malformed JSON", async () => {
-    const response = await authed(ctx, "/api/settings/", {
+    const response = await authed(ctx, "/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: "{not json",

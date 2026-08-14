@@ -126,6 +126,31 @@ reintroduce if the routing or middleware setup changes again.
   non-UUID `:id` reached `PostgresDevicesRepository` and Postgres rejected
   the query with `invalid input syntax for type uuid`. Fixed with a UUID
   format check before hitting the repository, returning a normal 404.
+- **`/api/settings/` (trailing slash) 404'd, silently breaking the Settings
+  dialog.** The endpoint's path came straight from the original .NET
+  reference implementation's ASP.NET Core convention. `vercel.json`'s
+  rewrite (`/api/:path*` → `/api`) compiles to a regex
+  (`^/api(?:/((?:[^/]+?)(?:/(?:[^/]+?))*))?$`) that requires every path
+  segment to be non-empty — a trailing slash implies an empty final
+  segment, so it never matches and falls through to Vercel's own 404,
+  before the request ever reaches the Hono app. Every other endpoint
+  (`/api/devices`, `/api/stats/*`, `/api/events`) never had a trailing
+  slash and was unaffected — confirmed by curling `/api/settings` (no
+  slash) vs `/api/settings/` (slash) against the live deployment and
+  getting `401` vs `404` respectively. Neither the in-process route tests
+  nor the local dev server (`devServer.ts`, no Vercel rewrite layer in
+  front of it) could have caught this — both bypass the exact routing
+  layer where the bug lives. Likely present since the very first
+  deployment; only surfaced once a user tried to open Settings against the
+  real production URL and it silently failed (`fetchSettings()` threw,
+  caught, "Could not load settings" toast, modal never opened — easy to
+  misread as "the feature is broken" rather than "the route 404s").
+  Fixed by dropping the trailing slash everywhere (`GET`/`PUT
+  /api/settings`, `docs/API_CONTRACT.md`, the frontend's `fetchSettings`/
+  `saveSettings`) rather than trying to make Vercel's rewrite regex accept
+  trailing slashes. **Lesson: any future endpoint must not end in `/`** —
+  this rewrite pattern can't support it, and nothing in the test suite
+  will catch a violation.
 
 ## D5 — Per-device stats filtering
 

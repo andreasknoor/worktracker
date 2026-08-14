@@ -232,11 +232,11 @@
   }
 
   async function fetchSettings() {
-    return fetchJson("/api/settings/");
+    return fetchJson("/api/settings");
   }
 
   async function saveSettings(dto) {
-    return fetchJson("/api/settings/", {
+    return fetchJson("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(dto),
