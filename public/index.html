@@ -246,15 +246,17 @@
     <h3 id="loginTitle">Sign in</h3>
     <p class="modal-sub">This dashboard is password-protected.</p>
 
-    <div class="field">
-      <label for="loginPassword">Password</label>
-      <input type="password" id="loginPassword">
-    </div>
-    <div id="loginError" class="hint" style="display:none; color: var(--danger, #d33);">Incorrect password</div>
+    <form id="loginForm" method="post">
+      <div class="field">
+        <label for="loginPassword">Password</label>
+        <input type="password" id="loginPassword" name="password" autocomplete="current-password">
+      </div>
+      <div id="loginError" class="hint" style="display:none; color: var(--danger, #d33);">Incorrect password</div>
 
-    <div class="modal-actions">
-      <button class="btn primary" id="loginSubmit">Sign in</button>
-    </div>
+      <div class="modal-actions">
+        <button type="submit" class="btn primary" id="loginSubmit">Sign in</button>
+      </div>
+    </form>
   </div>
 </div>
 

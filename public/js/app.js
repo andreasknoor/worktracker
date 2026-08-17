@@ -1793,14 +1793,18 @@
   function showLoginOverlay() {
     return new Promise(resolve => {
       const loginOverlay = document.getElementById("loginOverlay");
+      const loginForm = document.getElementById("loginForm");
       const loginPassword = document.getElementById("loginPassword");
       const loginError = document.getElementById("loginError");
-      const loginSubmit = document.getElementById("loginSubmit");
       openModal(loginOverlay);
       loginPassword.focus();
       loginPassword.value = "";
 
-      async function submit() {
+      // A real <form> submit (rather than a plain button click) is what lets
+      // the browser's password manager recognize this as a login and offer
+      // to save the password.
+      async function onSubmit(e) {
+        e.preventDefault();
         loginError.style.display = "none";
         try {
           const res = await fetch("/api/auth/login", {
@@ -1809,8 +1813,7 @@
             body: JSON.stringify({ password: loginPassword.value }),
           });
           if (res.ok) {
-            loginSubmit.removeEventListener("click", submit);
-            loginPassword.removeEventListener("keydown", onKeydown);
+            loginForm.removeEventListener("submit", onSubmit);
             closeModal(loginOverlay);
             resolve();
           } else {
@@ -1820,10 +1823,8 @@
           loginError.style.display = "block";
         }
       }
-      function onKeydown(e) { if (e.key === "Enter") submit(); }
 
-      loginSubmit.addEventListener("click", submit);
-      loginPassword.addEventListener("keydown", onKeydown);
+      loginForm.addEventListener("submit", onSubmit);
     });
   }
 
