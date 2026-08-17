@@ -407,44 +407,18 @@ describe("day-type filtering (?dayType=weekday|weekend|all)", () => {
   });
 
   it("sessions: excludes rows for non-matching days", async () => {
-    // /api/stats/sessions has no `?end=` override (always relative to the
-    // real "now"), so this scenario needs its own dynamically-picked
-    // weekday/weekend dates within the last 7 days rather than the fixed
-    // March 2026 dates used above.
-    const sessionsCtx = await setUp();
-    const { weekday, weekend } = recentWeekdayAndWeekendDates();
-    await seedDeviceWithEvents(sessionsCtx, [
-      weekday.getTime() + 9 * 60 * MINUTE,
-      weekday.getTime() + 9 * 60 * MINUTE + 5 * MINUTE,
-      weekend.getTime() + 10 * 60 * MINUTE,
-      weekend.getTime() + 10 * 60 * MINUTE + 30_000,
-      weekend.getTime() + 10 * 60 * MINUTE + 20 * MINUTE,
-    ]);
-
-    const response = await authedGet(sessionsCtx, "/api/stats/sessions?days=7&dayType=weekend");
+    const response = await authedGet(ctx, "/api/stats/sessions?days=7&end=2026-03-16&dayType=weekend");
     const rows = await response.json();
 
     expect(rows).toHaveLength(1);
-    expect(rows[0].date).toBe(weekend.toISOString().slice(0, 10));
+    expect(rows[0].date).toBe("2026-03-14");
+  });
+
+  it("sessions: rejects a malformed end param", async () => {
+    const response = await authedGet(ctx, "/api/stats/sessions?days=7&end=not-a-date");
+    expect(response.status).toBe(400);
   });
 });
-
-/** Finds a weekday and a weekend date within the last 7 days (today inclusive), in UTC. */
-function recentWeekdayAndWeekendDates(): { weekday: Date; weekend: Date } {
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-
-  let weekday: Date | undefined;
-  let weekend: Date | undefined;
-  for (let i = 0; i < 7; i += 1) {
-    const d = new Date(today.getTime() - i * 86_400_000);
-    const isWeekendDay = d.getUTCDay() === 0 || d.getUTCDay() === 6;
-    if (isWeekendDay && !weekend) weekend = d;
-    if (!isWeekendDay && !weekday) weekday = d;
-  }
-  if (!weekday || !weekend) throw new Error("Could not find both a weekday and a weekend day in the last 7 days");
-  return { weekday, weekend };
-}
 
 describe("GET /api/version", () => {
   it("is reachable without a session cookie and returns the app version", async () => {

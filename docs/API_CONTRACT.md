@@ -59,8 +59,8 @@ Range is `[end - days, end)`. Used both for the current period and (called again
 }
 ```
 
-### `GET /api/stats/sessions?days={n}` (default 7)
-Individual sessions in `[today+1-days, today+1)`, most recent first.
+### `GET /api/stats/sessions?days={n}&end=yyyy-MM-dd` (both optional; default `days=7`, `end=`tomorrow)
+Individual sessions in `[end - days, end)`, most recent first.
 ```json
 [
   { "date": "2026-03-11", "start": "09:02", "end": "12:47", "durationMinutes": 225 },

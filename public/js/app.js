@@ -96,6 +96,7 @@
   const state = {
     rangeDays: 7,        // used for stat tiles / trend / sessions; "all" resolves to a day count once first-activity is known
     rangeIsAllTime: false,
+    rangePreset: null,   // null | "this-week" | "last-week" — a fixed calendar week instead of a trailing day count
     firstActivityDate: null, // Date or null; fetched once at startup
     periodMode: "week",  // "week" | "month"
     displayMode: "totals", // "totals" | "timeline" — timeline is week-only
@@ -130,8 +131,22 @@
   }
 
   function setRangeFromParam(range) {
+    state.rangePreset = range === "this-week" || range === "last-week" ? range : null;
     state.rangeIsAllTime = range === "all";
-    if (!state.rangeIsAllTime) state.rangeDays = +range;
+    if (!state.rangeIsAllTime && !state.rangePreset) state.rangeDays = +range;
+  }
+
+  // Bounds of a fixed calendar-week preset, expressed the same way the rest of
+  // the app expresses ranges: a day count plus an exclusive end date (passed
+  // as `?end=` to the stats endpoints; see effectiveRangeEnd()).
+  function presetRangeBounds(preset) {
+    const monday = mondayOf(today);
+    if (preset === "this-week") {
+      const days = Math.floor((today - monday) / 86400000) + 1;
+      return { days, end: addDaysToToday(1) };
+    }
+    // last-week
+    return { days: 7, end: monday };
   }
 
   // Reflects the current filter state into the URL (via replaceState, so
@@ -142,7 +157,8 @@
     if (state.workType !== "all") params.set("workType", state.workType);
     else params.delete("workType");
 
-    if (state.rangeIsAllTime) params.set("range", "all");
+    if (state.rangePreset) params.set("range", state.rangePreset);
+    else if (state.rangeIsAllTime) params.set("range", "all");
     else params.set("range", String(state.rangeDays));
 
     if (state.dayType !== "all") params.set("dayType", state.dayType);
@@ -154,7 +170,7 @@
 
   const VALID_WORK_TYPES = ["all", "work", "leisure"];
   const VALID_DAY_TYPES = ["all", "weekday", "weekend"];
-  const VALID_RANGES = ["1", "7", "30", "90", "all"];
+  const VALID_RANGES = ["1", "7", "30", "90", "all", "this-week", "last-week"];
 
   // Applies workType/range/dayType from the URL query string (if present and
   // valid) on top of whatever setDayType/setWorkType already loaded from
@@ -182,7 +198,9 @@
   function syncFilterButtonsFromState() {
     document.querySelectorAll(".filter-chip").forEach(chip => {
       const range = chip.getAttribute("data-range");
-      const active = state.rangeIsAllTime ? range === "all" : !state.rangeIsAllTime && +range === state.rangeDays;
+      const active = state.rangePreset
+        ? range === state.rangePreset
+        : state.rangeIsAllTime ? range === "all" : +range === state.rangeDays;
       chip.setAttribute("aria-pressed", active ? "true" : "false");
     });
 
@@ -292,8 +310,9 @@
     return fetchJson("/api/stats/first-activity" + (query ? "?" + query : ""));
   }
 
-  async function fetchSessions(rangeDays) {
+  async function fetchSessions(rangeDays, endDate) {
     const params = withStatsParams(new URLSearchParams({ days: String(rangeDays) }));
+    if (endDate) params.set("end", isoDate(endDate));
     return fetchJson("/api/stats/sessions?" + params.toString());
   }
 
@@ -313,9 +332,16 @@
 
   async function renderStatTiles() {
     const rangeDays = effectiveRangeDays();
+    const rangeEnd = effectiveRangeEnd();
+    // Previous-period comparison always covers the same number of days
+    // immediately before the current window, whether that window trails from
+    // today or is anchored to a fixed preset end date.
+    const previousEnd = rangeEnd
+      ? new Date(rangeEnd.getFullYear(), rangeEnd.getMonth(), rangeEnd.getDate() - rangeDays)
+      : addDaysToToday(-rangeDays);
     const [current, previous, trendSummary] = await Promise.all([
-      fetchSummary(rangeDays),
-      fetchSummary(rangeDays, addDaysToToday(-rangeDays)),
+      fetchSummary(rangeDays, rangeEnd || undefined),
+      fetchSummary(rangeDays, previousEnd),
       fetchSummary(12),
     ]);
 
@@ -391,10 +417,18 @@
   /// Resolves the "All time" filter to a concrete day count once the first tracked
   /// activity date is known; falls back to a generous default before that resolves.
   function effectiveRangeDays() {
+    if (state.rangePreset) return presetRangeBounds(state.rangePreset).days;
     if (!state.rangeIsAllTime) return state.rangeDays;
     if (!state.firstActivityDate) return 3650; // nothing tracked yet, or still loading
     const days = Math.floor((today - startOfDay(state.firstActivityDate)) / 86400000) + 1;
     return Math.max(1, days);
+  }
+
+  // The fixed exclusive end date a range preset ("this-week"/"last-week")
+  // anchors to, or null for the usual trailing-from-today ranges (where every
+  // fetch*() call already defaults to ending "tomorrow" server-side).
+  function effectiveRangeEnd() {
+    return state.rangePreset ? presetRangeBounds(state.rangePreset).end : null;
   }
 
   function addDaysToToday(offset) {
@@ -784,7 +818,7 @@
   async function renderTrendChart() {
     const rangeDays = effectiveRangeDays();
     const trendDays = Math.max(rangeDays, 14);
-    const summary = await fetchSummary(trendDays);
+    const summary = await fetchSummary(trendDays, effectiveRangeEnd() || undefined);
     const series = summary.daily.map(d => ({ date: parseIsoDate(d.date), hours: d.hours }));
 
     document.getElementById("trendCaption").textContent =
@@ -888,7 +922,7 @@
   /* ---------- Session log table ---------- */
 
   async function renderSessionTable() {
-    const sessions = await fetchSessions(effectiveRangeDays());
+    const sessions = await fetchSessions(effectiveRangeDays(), effectiveRangeEnd() || undefined);
 
     const CAP = 30;
     const shown = sessions.slice(0, CAP);

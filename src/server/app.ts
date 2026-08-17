@@ -423,7 +423,11 @@ export function createApp(deps: AppDependencies): Hono {
     const days = parseDaysParam(c);
     if (days instanceof Response) return days;
 
-    const endExclusive = isoDateKey(addOneDay(new Date()));
+    const endParam = c.req.query("end");
+    if (endParam !== undefined && !isValidDateKey(endParam)) {
+      return c.json({ error: "end must be a valid yyyy-MM-dd date" }, 400);
+    }
+    const endExclusive = endParam ?? isoDateKey(addOneDay(new Date()));
     const start = addDays(endExclusive, -days);
 
     const sessions = await getSessionsForRequest(
