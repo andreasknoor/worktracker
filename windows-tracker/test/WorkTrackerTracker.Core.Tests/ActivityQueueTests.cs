@@ -106,4 +106,63 @@ public sealed class ActivityQueueTests : IDisposable
         var second = new ActivityQueue(_tempFile);
         Assert.Equal(0, second.PendingCount);
     }
+
+    [Fact]
+    public void LastSuccessfulSyncAt_IsNullInitially()
+    {
+        var queue = new ActivityQueue(_tempFile);
+        Assert.Null(queue.LastSuccessfulSyncAt);
+    }
+
+    [Fact]
+    public async Task Flush_OnSuccess_SetsLastSuccessfulSyncAt()
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var queue = new ActivityQueue(_tempFile, () => now);
+        queue.Enqueue(now);
+
+        await queue.FlushAsync(new FakeEventsApiClient(), "https://example.vercel.app", "k");
+
+        Assert.Equal(now, queue.LastSuccessfulSyncAt);
+    }
+
+    [Fact]
+    public async Task Flush_OnFailure_DoesNotSetLastSuccessfulSyncAt()
+    {
+        var queue = new ActivityQueue(_tempFile);
+        queue.Enqueue(DateTimeOffset.UtcNow);
+        var client = new FakeEventsApiClient { ShouldFail = true };
+
+        await queue.FlushAsync(client, "https://example.vercel.app", "k");
+
+        Assert.Null(queue.LastSuccessfulSyncAt);
+    }
+
+    [Fact]
+    public async Task LastSuccessfulSyncAt_SurvivesRestart_ByPersistingToDisk()
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var first = new ActivityQueue(_tempFile, () => now);
+        first.Enqueue(now);
+        await first.FlushAsync(new FakeEventsApiClient(), "https://example.vercel.app", "k");
+
+        var second = new ActivityQueue(_tempFile);
+        Assert.Equal(now, second.LastSuccessfulSyncAt);
+    }
+
+    [Fact]
+    public void LoadsAnOlderQueueFile_WrittenBeforeLastSuccessfulSyncAtExisted()
+    {
+        // Pre-upgrade queue files are a bare `[String]` of ISO 8601
+        // timestamps, with no lastSuccessfulSyncAt field at all.
+        var directory = Path.GetDirectoryName(_tempFile)!;
+        Directory.CreateDirectory(directory);
+        var legacyJson = System.Text.Json.JsonSerializer.Serialize(new[] { DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ") });
+        File.WriteAllText(_tempFile, legacyJson);
+
+        var queue = new ActivityQueue(_tempFile);
+
+        Assert.Equal(1, queue.PendingCount);
+        Assert.Null(queue.LastSuccessfulSyncAt);
+    }
 }

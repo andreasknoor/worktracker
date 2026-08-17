@@ -68,6 +68,24 @@ Devices panel.
 Configuration and the pending-events queue are stored at
 `%AppData%\WorkTracker\`.
 
+## Publishing for autostart
+
+`dotnet run`/`dotnet build` produce a framework-dependent .exe that needs the
+.NET Desktop Runtime installed system-wide — fine when launched from a dev
+shell, but autostart (Registry `Run` key, no admin rights) fails with a
+runtime-missing prompt if that runtime isn't already present. The
+`.csproj` is configured for a self-contained publish instead, which bundles
+the runtime into the output so the .exe runs standalone:
+
+```powershell
+dotnet publish src\WorkTrackerTracker.App\WorkTrackerTracker.App.csproj -c Release
+```
+
+Output lands in
+`src\WorkTrackerTracker.App\bin\Release\net8.0-windows\win-x64\publish\`.
+Point the "Start with Windows" Registry value (and any shortcut) at
+`WorkTrackerTracker.App.exe` in that folder, not the `bin\Debug\...` build.
+
 ## Structure
 
 - `TrackerConfig.cs` / `ConfigStore` — config (server URL, API key, poll interval) and its JSON persistence.
