@@ -10,5 +10,5 @@ namespace WorkTrackerTracker.App;
 /// </summary>
 internal static class AppVersion
 {
-    public const string Current = "1.6";
+    public const string Current = "1.7";
 }

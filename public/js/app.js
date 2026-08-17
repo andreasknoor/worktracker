@@ -425,11 +425,6 @@
     timelineSvg.style.display = showTimeline ? "" : "none";
     document.getElementById("coreHoursOnlyLabel").style.display = showTimeline ? "" : "none";
 
-    if (showTimeline) {
-      await renderTimelineChart();
-      return;
-    }
-
     let days, rangeLabel;
     if (isMonth) {
       const anchor = new Date(today.getFullYear(), today.getMonth() + state.monthOffset, 1);
@@ -450,6 +445,16 @@
 
     document.getElementById("periodRange").textContent = rangeLabel;
     document.getElementById("periodPrev").disabled = false;
+
+    const periodTotalHours = days.reduce((sum, d) => sum + d.hours, 0);
+    const periodAvgHours = days.length > 0 ? periodTotalHours / days.length : 0;
+    document.getElementById("weeklySummaryLine").textContent =
+      "Total " + fmtHours(periodTotalHours) + " · Avg " + fmtHours(periodAvgHours) + "/day";
+
+    if (showTimeline) {
+      await renderTimelineChart();
+      return;
+    }
 
     const W = 1040, H = 260;
     const padL = 36, padR = 12, padT = 24, padB = 30;
@@ -517,10 +522,9 @@
 
     svg.innerHTML = parts.join("");
     svg.setAttribute("viewBox", "0 0 " + W + " " + H);
-    const totalHours = days.reduce((sum, d) => sum + d.hours, 0);
     svg.setAttribute("role", "img");
     svg.setAttribute("aria-label",
-      (isMonth ? "Monthly" : "Weekly") + " hours bar chart, " + rangeLabel + ", totaling " + fmtHours(totalHours) + ".");
+      (isMonth ? "Monthly" : "Weekly") + " hours bar chart, " + rangeLabel + ", totaling " + fmtHours(periodTotalHours) + ".");
 
     function showBarTooltip(idx, clientY) {
       const d = days[idx];
