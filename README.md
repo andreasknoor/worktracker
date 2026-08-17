@@ -4,7 +4,40 @@ A personal work-time tracker: lightweight desktop trackers record keyboard/mouse
 activity timestamps only (never key content or window titles), a Node.js/TypeScript
 server turns those timestamps into work sessions, and a dashboard visualizes them.
 
+## Why
+
+I wanted a simple, unfussy answer to a question I kept asking myself: how much time
+do I actually spend at the computer — for work, for personal use, and combined? The
+line between the two is often blurry, so instead of two separate numbers I wanted a
+tool that could capture both and still keep them apart cleanly, depending on which
+answer I needed at the moment.
+
 ![WorkTracker dashboard](docs/images/dashboard-screenshot.png)
+
+## How this was built
+
+Every line of code in this repository was written by Claude Code, Anthropic's AI
+coding agent — not typed by me. My role was that of an orchestrator: I made the
+architecture decisions, defined the scope, reviewed every change, and did the
+quality assurance myself.
+
+In practice that meant: when the original spec hit a limit — for example, when it
+turned out mid-development that device settings needed to be configurable
+per-device rather than globally — deciding how to resolve that was my call, not the
+agent's. I tested every deployment stage myself against the actually running
+application, rather than accepting a green automated test suite as sufficient
+proof. And in several places I deliberately kept the scope narrow — no multi-user
+support, no tracking of window titles or application names — because that would
+have worked against the tool's actual purpose.
+
+A complete, unedited log of the technical and product decisions made during
+development lives in `docs/IMPLEMENTATION_NOTES.md`.
+
+## Status
+
+WorkTracker runs in production at
+[worktracker.accessible-places.org](https://worktracker.accessible-places.org) and
+I use it daily to track my own work time.
 
 ## Architecture
 

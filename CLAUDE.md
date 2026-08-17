@@ -27,7 +27,11 @@ Mac tracker      ─┘                                                   │
   served by Vercel and talking to the API via `fetch()`. Password-protected.
 - **`mac-tracker/`** — native Swift/AppKit menu-bar app. Buildable and testable on
   macOS only.
-- **`windows-tracker/`** — not yet implemented (placeholder directory).
+- **`windows-tracker/`** — native .NET/WinForms tray app. `Core` (config
+  persistence, activity queue, HTTP client, idle/poll decision) is
+  platform-independent and built/tested cross-platform; the `App` shell
+  (`GetLastInputInfo` P/Invoke, tray icon, settings dialog) compiles on
+  macOS but has only run on Windows. See `windows-tracker/README.md`.
 
 ## Commands
 
@@ -68,6 +72,18 @@ swift test    # requires the full Xcode toolchain's XCTest.framework; if
                # not `swift run` — a bundle-less process has no
                # CFBundleIdentifier and the menu-bar icon often fails to render
 ```
+
+Windows tracker (run from `windows-tracker/`):
+
+```powershell
+dotnet test test\WorkTrackerTracker.Core.Tests\WorkTrackerTracker.Core.Tests.csproj
+dotnet build WorkTrackerTracker.slnx
+dotnet run --project src\WorkTrackerTracker.App\WorkTrackerTracker.App.csproj
+```
+
+`Core` and its tests also build on macOS (`dotnet test`), but `App` (the
+tray shell) has never been run outside Windows — see
+`windows-tracker/README.md` for what still needs verifying there.
 
 ## Architecture notes worth knowing before changing code
 
