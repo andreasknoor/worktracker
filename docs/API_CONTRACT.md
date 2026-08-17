@@ -71,8 +71,14 @@ Individual sessions in `[today+1-days, today+1)`, most recent first.
 ### `GET /api/stats/live`
 Polled every 15s by the dashboard for the live ring/timer.
 ```json
-{ "isActive": true, "todaySeconds": 14520, "currentSessionSeconds": 1830 }
+{ "isActive": true, "todaySeconds": 14520, "currentSessionSeconds": 1830, "activeDeviceIds": ["..."] }
 ```
+`activeDeviceIds` lists the device(s) contributing to the still-running
+session (empty when `isActive` is `false`), via the same device-attribution
+mechanism as `week-timeline` (see "Device attribution" below) applied to the
+live range instead of a historical one. With `?deviceId=` set it's just
+`[deviceId]` or `[]`; the dashboard only shows it in the "all devices" view
+since a single-device filter already implies the answer.
 
 ### `GET /api/stats/first-activity`
 Anchors the "All time" range filter.
@@ -213,7 +219,7 @@ activity. `summary`'s `longestSessionMinutes` is scoped to sessions whose
 *start* falls in the filtered classification. `live` and `first-activity`
 don't accept this param, same rationale as `dayType`.
 
-## Device attribution (Timeline chart, dimension 1)
+## Device attribution (Timeline chart & live session, dimension 1)
 
 `GET /api/stats/week-timeline`'s `deviceIds` field (see above) lets the
 dashboard color the aggregated Timeline chart per device, with a neutral
@@ -227,6 +233,12 @@ mean two different things at once. If `?workType=` is also passed, the
 attributed sessions are computed *within* that classification bucket first,
 so the Timeline chart's device colors reflect only the currently filtered
 work/leisure slice.
+
+`GET /api/stats/live`'s `activeDeviceIds` (see above) reuses this same
+mechanism — `getAttributedSessionsInRange` — applied to the live range
+instead of a historical week, reading `deviceIds` off the last (currently
+still-running) interval. Named devices in the "Current session" hint, not a
+color, since the live tile isn't a chart.
 
 ## Resolved during implementation
 

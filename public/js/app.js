@@ -1616,6 +1616,7 @@
     todaySeconds: 0,
     currentSessionSeconds: 0,
     sessionStartedAt: null,
+    activeDeviceIds: [],
   };
 
   function renderLive() {
@@ -1623,9 +1624,19 @@
     liveTodayValue.textContent = formatClock(live.todaySeconds);
     liveSessionValue.textContent = live.isActive ? formatClock(live.currentSessionSeconds) : "00:00:00";
     liveSessionLabel.textContent = live.isActive ? "Current session" : "Idle since last session";
-    liveSessionHint.textContent = live.isActive && live.sessionStartedAt
-      ? "Started at " + live.sessionStartedAt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
-      : "";
+
+    let hint = "";
+    if (live.isActive && live.sessionStartedAt) {
+      hint = "Started at " + live.sessionStartedAt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+      // Only worth naming the device(s) in the "all devices" view — with a
+      // single-device filter active, the hint would just repeat what the
+      // filter dropdown already says.
+      if (state.selectedDeviceId === "" && live.activeDeviceIds.length > 0) {
+        const names = live.activeDeviceIds.map(deviceNameById);
+        hint += " · " + names.join(" + ");
+      }
+    }
+    liveSessionHint.textContent = hint;
 
     const pct = Math.min(1, live.todaySeconds / DAILY_GOAL_SECONDS);
     liveRingProgress.setAttribute("stroke-dasharray", RING_CIRCUMFERENCE.toFixed(1));
@@ -1641,6 +1652,7 @@
       live.sessionStartedAt = data.isActive
         ? new Date(Date.now() - data.currentSessionSeconds * 1000)
         : null;
+      live.activeDeviceIds = data.activeDeviceIds || [];
       renderLive();
     } catch (err) {
       console.error(err);

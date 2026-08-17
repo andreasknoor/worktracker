@@ -204,6 +204,7 @@ describe("StatsEndpointsTests", () => {
     expect(live.isActive).toBe(false);
     expect(live.todaySeconds).toBe(0);
     expect(live.currentSessionSeconds).toBe(0);
+    expect(live.activeDeviceIds).toEqual([]);
   });
 
   it("GetLive_WithRecentActivity_ReportsActiveAndExtendsSessionToNow", async () => {
@@ -211,7 +212,8 @@ describe("StatsEndpointsTests", () => {
     // A session that started 10 minutes ago and had its last keystroke just
     // now (well within the default 30-min idle threshold) should read as
     // still active.
-    await seedDeviceWithEvents(ctx, [now - 10 * MINUTE, now - 5 * MINUTE, now - 2000]);
+    const device = await ctx.devices.create({ name: "Test Device", platform: "mac", apiKeyHash: hashApiKey("k") });
+    await ctx.events.insertEvents(device.id, [now - 10 * MINUTE, now - 5 * MINUTE, now - 2000]);
 
     const response = await authedGet(ctx, "/api/stats/live");
     expect(response.status).toBe(200);
@@ -222,6 +224,37 @@ describe("StatsEndpointsTests", () => {
     expect(live.currentSessionSeconds).toBeGreaterThanOrEqual(595);
     expect(live.currentSessionSeconds).toBeLessThanOrEqual(610);
     expect(live.todaySeconds).toBeGreaterThanOrEqual(live.currentSessionSeconds);
+    expect(live.activeDeviceIds).toEqual([device.id]);
+  });
+
+  it("GetLive_WithTwoDevicesActive_ReportsBothInActiveDeviceIds", async () => {
+    const now = Date.now();
+    const deviceA = await ctx.devices.create({ name: "Device A", platform: "mac", apiKeyHash: hashApiKey("a") });
+    const deviceB = await ctx.devices.create({ name: "Device B", platform: "windows", apiKeyHash: hashApiKey("b") });
+    await ctx.events.insertEvents(deviceA.id, [now - 10 * MINUTE, now - 2000]);
+    await ctx.events.insertEvents(deviceB.id, [now - 8 * MINUTE, now - 1000]);
+
+    const response = await authedGet(ctx, "/api/stats/live");
+    expect(response.status).toBe(200);
+    const live = await response.json();
+
+    expect(live.isActive).toBe(true);
+    expect([...live.activeDeviceIds].sort()).toEqual([deviceA.id, deviceB.id].sort());
+  });
+
+  it("GetLive_WithDeviceIdFilter_ReportsOnlyThatDevice", async () => {
+    const now = Date.now();
+    const deviceA = await ctx.devices.create({ name: "Device A", platform: "mac", apiKeyHash: hashApiKey("a") });
+    const deviceB = await ctx.devices.create({ name: "Device B", platform: "windows", apiKeyHash: hashApiKey("b") });
+    await ctx.events.insertEvents(deviceA.id, [now - 10 * MINUTE, now - 2000]);
+    await ctx.events.insertEvents(deviceB.id, [now - 8 * MINUTE, now - 1000]);
+
+    const response = await authedGet(ctx, "/api/stats/live?deviceId=" + deviceA.id);
+    expect(response.status).toBe(200);
+    const live = await response.json();
+
+    expect(live.isActive).toBe(true);
+    expect(live.activeDeviceIds).toEqual([deviceA.id]);
   });
 
   it("GetLive_WithOldActivityPastIdleThreshold_ReportsInactiveButKeepsTodayTotal", async () => {
@@ -237,6 +270,7 @@ describe("StatsEndpointsTests", () => {
     expect(live.isActive).toBe(false);
     expect(live.currentSessionSeconds).toBe(0);
     expect(live.todaySeconds).toBeGreaterThan(0);
+    expect(live.activeDeviceIds).toEqual([]);
   });
 });
 

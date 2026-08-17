@@ -9,6 +9,7 @@ import {
   formatHHmm,
   isWeekend,
   liveView,
+  mergeSessions,
   mondayOnOrBefore,
   monthEndExclusive,
   monthStart,
@@ -462,18 +463,50 @@ export function createApp(deps: AppDependencies): Hono {
     // potentially still running is fully captured.
     const bufferedStart = Date.parse(addDays(todayKey, -1) + "T00:00:00Z");
 
-    const sessions = await getMergedSessionsInRange(deps.devices, deps.events, bufferedStart, now + 1, deviceId);
+    // Attributed (not just merged) so we can report which device(s) are
+    // behind the currently-running session — the same mechanism the Timeline
+    // chart uses (see getAttributedSessionsInRange), applied to the live
+    // range instead of a historical one. mergeSessionsWithDeviceIds slices
+    // at every point the active device set changes, so its intervals are
+    // finer-grained than the coarse merged session liveView reasons about —
+    // feeding them to liveView directly would misattribute the session's
+    // start (and thus its duration) to whichever device happened to be last
+    // active, not the device(s) that started it. So liveView still gets the
+    // coarse merge; activeDeviceIds is the union of every attributed
+    // interval overlapping that last merged session.
+    const attributedSessions = await getAttributedSessionsInRange(
+      deps.devices,
+      deps.events,
+      bufferedStart,
+      now + 1,
+      timeZone,
+      "all",
+      deviceId,
+    );
+    const sessions = mergeSessions([attributedSessions.map(({ start, end }) => ({ start, end }))]);
 
     const allDevices = await deps.devices.list();
     const relevantDevices = deviceId ? allDevices.filter((d) => d.id === deviceId) : allDevices;
     const maxIdleThresholdMs = Math.max(30 * 60_000, ...relevantDevices.map((d) => d.idleThresholdMinutes * 60_000));
 
     const live = liveView(sessions, now, maxIdleThresholdMs, timeZone);
+    const lastSession = sessions[sessions.length - 1];
+    const activeDeviceIds =
+      live.isActive && lastSession
+        ? [
+            ...new Set(
+              attributedSessions
+                .filter((s) => s.start < lastSession.end && s.end > lastSession.start)
+                .flatMap((s) => s.deviceIds),
+            ),
+          ].sort()
+        : [];
 
     return c.json({
       isActive: live.isActive,
       todaySeconds: live.todayWorkedTimeMs / 1000,
       currentSessionSeconds: live.currentSessionMs / 1000,
+      activeDeviceIds,
     });
   });
 
