@@ -129,6 +129,72 @@
     safeSetItem(WORK_TYPE_STORAGE_KEY, state.workType);
   }
 
+  function setRangeFromParam(range) {
+    state.rangeIsAllTime = range === "all";
+    if (!state.rangeIsAllTime) state.rangeDays = +range;
+  }
+
+  // Reflects the current filter state into the URL (via replaceState, so
+  // filter clicks don't pollute browser history) so the dashboard's state can
+  // be bookmarked or shared as a link.
+  function updateUrlFromState() {
+    const params = new URLSearchParams(location.search);
+    if (state.workType !== "all") params.set("workType", state.workType);
+    else params.delete("workType");
+
+    if (state.rangeIsAllTime) params.set("range", "all");
+    else params.set("range", String(state.rangeDays));
+
+    if (state.dayType !== "all") params.set("dayType", state.dayType);
+    else params.delete("dayType");
+
+    const query = params.toString();
+    history.replaceState(null, "", query ? "?" + query : location.pathname);
+  }
+
+  const VALID_WORK_TYPES = ["all", "work", "leisure"];
+  const VALID_DAY_TYPES = ["all", "weekday", "weekend"];
+  const VALID_RANGES = ["1", "7", "30", "90", "all"];
+
+  // Applies workType/range/dayType from the URL query string (if present and
+  // valid) on top of whatever setDayType/setWorkType already loaded from
+  // localStorage above — a shared/bookmarked link is meant to override the
+  // viewer's own last-used filters, not just seed a default. Invalid or
+  // unrecognized values are ignored, falling back to the localStorage value,
+  // so a malformed query string can't put the dashboard in a broken state.
+  function bootstrapStateFromUrl() {
+    const params = new URLSearchParams(location.search);
+
+    const workType = params.get("workType");
+    if (VALID_WORK_TYPES.includes(workType)) setWorkType(workType);
+
+    const dayType = params.get("dayType");
+    if (VALID_DAY_TYPES.includes(dayType)) setDayType(dayType);
+
+    const range = params.get("range");
+    if (VALID_RANGES.includes(range)) setRangeFromParam(range);
+  }
+
+  // Re-syncs the segmented-button / filter-chip aria-pressed state (and the
+  // range filter-chips, which don't go through setDayType/setWorkType) after
+  // bootstrapStateFromUrl() may have changed state without going through a
+  // click handler.
+  function syncFilterButtonsFromState() {
+    document.querySelectorAll(".filter-chip").forEach(chip => {
+      const range = chip.getAttribute("data-range");
+      const active = state.rangeIsAllTime ? range === "all" : !state.rangeIsAllTime && +range === state.rangeDays;
+      chip.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+
+    document.getElementById("dayTypeGroup").querySelectorAll(".segmented-btn").forEach(btn => {
+      btn.setAttribute("aria-pressed", btn.getAttribute("data-day-type") === state.dayType ? "true" : "false");
+    });
+
+    document.getElementById("workTypeGroup").querySelectorAll(".segmented-btn").forEach(btn => {
+      btn.setAttribute("aria-pressed", btn.getAttribute("data-work-type") === state.workType ? "true" : "false");
+    });
+  }
+
   function withDeviceParam(params) {
     if (state.selectedDeviceId) params.set("deviceId", state.selectedDeviceId);
     return params;
@@ -861,8 +927,8 @@
       document.querySelectorAll(".filter-chip").forEach(c => c.setAttribute("aria-pressed", "false"));
       chip.setAttribute("aria-pressed", "true");
       const range = chip.getAttribute("data-range");
-      state.rangeIsAllTime = range === "all";
-      if (!state.rangeIsAllTime) state.rangeDays = +range;
+      setRangeFromParam(range);
+      updateUrlFromState();
       renderAll();
     });
   });
@@ -877,6 +943,7 @@
       dayTypeGroup.querySelectorAll(".segmented-btn").forEach(b => b.setAttribute("aria-pressed", "false"));
       btn.setAttribute("aria-pressed", "true");
       setDayType(btn.getAttribute("data-day-type"));
+      updateUrlFromState();
       renderAll();
     });
   });
@@ -891,6 +958,7 @@
       workTypeGroup.querySelectorAll(".segmented-btn").forEach(b => b.setAttribute("aria-pressed", "false"));
       btn.setAttribute("aria-pressed", "true");
       setWorkType(btn.getAttribute("data-work-type"));
+      updateUrlFromState();
       renderAll();
     });
   });
@@ -1804,6 +1872,9 @@
           updateDeviceHealthBanner(devicesCache);
         })
         .catch(err => console.error(err));
+
+      bootstrapStateFromUrl();
+      syncFilterButtonsFromState();
 
       function renderAllWithAuthHandling() {
         renderAll().catch(err => {

@@ -79,6 +79,15 @@ internal sealed class SettingsForm : Form
         buttonRow.Controls.Add(cancelButton);
         layout.Controls.Add(buttonRow);
 
+        layout.Controls.Add(new Label
+        {
+            Text = $"WorkTracker v{AppVersion.Current}",
+            AutoSize = true,
+            ForeColor = SystemColors.GrayText,
+            Font = new Font(SystemFonts.DefaultFont.FontFamily, 8),
+            Margin = new Padding(0, 12, 0, 0),
+        });
+
         Controls.Add(layout);
         AcceptButton = saveButton;
         CancelButton = cancelButton;

@@ -168,13 +168,19 @@ shown in the dashboard header) started at `1.0`.
 
 **When making a "normal" change to this project, bump the minor number**
 (`1.0` → `1.1` → `1.2` → ...) as part of that change — this is standing
-instruction, not something to ask about each time. **Only bump the major
-number** (`1.x` → `2.0`, resetting minor to `0`) when the user explicitly
-asks for a major-version bump. Keep `package.json` and
-`src/server/config.ts`'s `APP_VERSION` equal — they're two separate
-constants (not one JSON import) because `src/server/*.ts` runs directly in
-Vercel's per-file Node Function build, which doesn't guarantee a
-working-directory-relative file read of `package.json` at runtime.
+instruction, not something to ask about each time, and applies regardless of
+which part of the project the change touches (server, dashboard, Windows
+tracker, Mac tracker, docs, ...) — there is one global version, not one per
+component. **Only bump the major number** (`1.x` → `2.0`, resetting minor to
+`0`) when the user explicitly asks for a major-version bump. Keep
+`package.json`, `src/server/config.ts`'s `APP_VERSION`, and
+`windows-tracker/src/WorkTrackerTracker.App/AppVersion.cs`'s `Current`
+(shown in the Windows tracker's Settings dialog) all equal — they're
+separate constants (not one shared import) because each runs in an
+independent build (`src/server/*.ts` in Vercel's per-file Node Function
+build without a guaranteed working-directory-relative read of
+`package.json`; the Windows tracker as its own .NET project outside the npm
+workspace).
 
 ## Documentation
 
