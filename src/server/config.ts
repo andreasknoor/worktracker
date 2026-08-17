@@ -12,7 +12,7 @@
  * 1.2 -> ...); a major bump (-> 2.0, resetting minor to 0) only happens when
  * explicitly requested.
  */
-export const APP_VERSION = "1.10";
+export const APP_VERSION = "1.11";
 
 /**
  * IANA time zone used for every day-boundary computation ("today", midnight
