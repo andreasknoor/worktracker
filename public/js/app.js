@@ -447,7 +447,8 @@
     document.getElementById("periodPrev").disabled = false;
 
     const periodTotalHours = days.reduce((sum, d) => sum + d.hours, 0);
-    const periodAvgHours = days.length > 0 ? periodTotalHours / days.length : 0;
+    const activeDayCount = days.filter(d => d.hours > 0).length;
+    const periodAvgHours = activeDayCount > 0 ? periodTotalHours / activeDayCount : 0;
     document.getElementById("weeklySummaryLine").textContent =
       "Total " + fmtHours(periodTotalHours) + " · Avg " + fmtHours(periodAvgHours) + "/day";
 
