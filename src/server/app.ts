@@ -102,7 +102,7 @@ function filterDailyHours(daily: readonly DailyHours[], dayType: DayType): Daily
   return daily.map((d) => (matchesDayType(d.date, dayType) ? d : { ...d, workedTimeMs: 0 }));
 }
 
-function filterDailySegments(days: readonly DailySegments[], dayType: DayType): DailySegments[] {
+function filterDailySegments<T extends DailySegments>(days: readonly T[], dayType: DayType): T[] {
   if (dayType === "all") return [...days];
   return days.map((d) => (matchesDayType(d.date, dayType) ? d : { ...d, segments: [] }));
 }
@@ -430,8 +430,9 @@ export function createApp(deps: AppDependencies): Hono {
     const endExclusive = endParam ?? isoDateKey(addOneDay(new Date()));
     const start = addDays(endExclusive, -days);
 
-    const sessions = await getSessionsForRequest(
-      deps,
+    const sessions = await getAttributedSessionsInRange(
+      deps.devices,
+      deps.events,
       Date.parse(start + "T00:00:00Z"),
       Date.parse(endExclusive + "T00:00:00Z"),
       timeZone,
@@ -443,13 +444,14 @@ export function createApp(deps: AppDependencies): Hono {
     // midnight-clipping logic as the timeline chart), so a session spanning
     // midnight shows up as one row per day it touches — see D4 in
     // docs/IMPLEMENTATION_NOTES.md.
-    const segments = filterDailySegments(dailySegments(sessions, start, endExclusive, timeZone), dayType);
+    const segments = filterDailySegments(dailySegmentsWithSource(sessions, start, endExclusive, timeZone), dayType);
     const rows = segments.flatMap((day) =>
       day.segments.map((s) => ({
         date: day.date,
         start: minutesToHHmm(s.startMinutes),
         end: minutesToHHmm(s.endMinutes),
         durationMinutes: s.endMinutes - s.startMinutes,
+        deviceIds: s.deviceIds,
       })),
     );
     rows.sort((a, b) => (a.date === b.date ? b.start.localeCompare(a.start) : b.date.localeCompare(a.date)));

@@ -194,6 +194,8 @@ describe("StatsEndpointsTests", () => {
     expect(sessions).toHaveLength(2);
     expect(sessions[0].start).toBe("14:00");
     expect(sessions[1].start).toBe("09:00");
+    expect(sessions[0].deviceIds).toHaveLength(1);
+    expect(sessions[1].deviceIds).toEqual(sessions[0].deviceIds);
   });
 
   it("GetLive_WithNoActivity_ReturnsInactiveAndZero", async () => {

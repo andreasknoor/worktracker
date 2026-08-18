@@ -63,10 +63,15 @@ Range is `[end - days, end)`. Used both for the current period and (called again
 Individual sessions in `[end - days, end)`, most recent first.
 ```json
 [
-  { "date": "2026-03-11", "start": "09:02", "end": "12:47", "durationMinutes": 225 },
+  { "date": "2026-03-11", "start": "09:02", "end": "12:47", "durationMinutes": 225, "deviceIds": ["..."] },
   ...
 ]
 ```
+`deviceIds` uses the same device-attribution mechanism as `week-timeline` (see
+"Device attribution" below): the device(s) that contributed to that segment,
+`[]` if none matched (shouldn't normally happen), 2+ entries when devices
+overlapped in that interval. With `?deviceId=` set it's always `[deviceId]`
+or `[]`.
 
 ### `GET /api/stats/live`
 Polled every 15s by the dashboard for the live ring/timer.

@@ -940,12 +940,14 @@
 
     const rows = shown.map(s => {
       const date = parseIsoDate(s.date);
+      const deviceLabel = segmentDeviceLabel(s) || "—";
       return "<tr><td>" + formatWeekday(date) + ", " + formatShortDate(date) + "</td><td>" +
-        s.start + " – " + s.end + '</td><td class="num">' + fmtMinutes(s.durationMinutes) + "</td></tr>";
+        s.start + " – " + s.end + '</td><td class="num">' + fmtMinutes(s.durationMinutes) +
+        "</td><td>" + escapeHtml(deviceLabel) + "</td></tr>";
     }).join("");
 
     document.getElementById("sessionTableWrap").innerHTML =
-      '<table class="data-table"><thead><tr><th>Day</th><th>Time</th><th class="num">Duration</th></tr></thead><tbody>' + rows + "</tbody></table>";
+      '<table class="data-table"><thead><tr><th>Day</th><th>Time</th><th class="num">Duration</th><th>Device</th></tr></thead><tbody>' + rows + "</tbody></table>";
   }
 
   /* ---------- Render all ---------- */
