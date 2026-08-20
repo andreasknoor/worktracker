@@ -108,14 +108,38 @@
     </div>
   </div>
 
+  <!-- Card order and grouping below follow the filters' actual reach, not
+       just usage habit: "Selected range" and "History" both fully obey every
+       filter chip above and sit closest to them; "This week's shape" only
+       partly does (its own Week/Month nav overrides the date range); "Always
+       current" ignores the filter row entirely bar the device picker, and is
+       deliberately kept high (not pushed to the very bottom) since it's what
+       you'd check first regardless of any filter. Every card also carries an
+       explicit .scope-badge, since position alone can't distinguish "partial"
+       from "none" — see docs/IMPLEMENTATION_NOTES.md D7. -->
+
+  <div class="section-label">Selected range</div>
+
+  <div class="stat-grid-header">
+    <span class="scope-badge tier-full">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 4h16M7 4v16M17 4v16"></path></svg>
+      Uses filters above
+    </span>
+  </div>
   <div class="stat-grid" id="statGrid"></div>
 
-  <div class="card">
+  <div class="section-label">This week's shape</div>
+
+  <div class="card tier-partial">
     <div class="card-header">
       <div class="titles">
         <h2 id="periodTitle">Weekly overview</h2>
         <div class="caption" id="weeklyCaption">Hours worked per day</div>
         <div class="caption" id="weeklySummaryLine"></div>
+        <span class="scope-badge tier-partial">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 4h16M7 4v16M17 4v16"></path></svg>
+          Day type &amp; work type only
+        </span>
       </div>
       <div class="card-controls">
         <div class="segmented" role="group" aria-label="Chart display mode" id="displayModeGroup">
@@ -125,6 +149,10 @@
         <label class="checkbox-label" id="coreHoursOnlyLabel" style="display:none;">
           <input type="checkbox" id="coreHoursOnlyToggle">
           Core hours only
+        </label>
+        <label class="checkbox-label" id="comparePeriodLabel">
+          <input type="checkbox" id="comparePeriodToggle">
+          Compare with previous period
         </label>
         <div class="segmented" role="group" aria-label="Period view">
           <button class="segmented-btn" data-period="week" aria-pressed="true">Week</button>
@@ -140,7 +168,9 @@
         <button class="table-toggle" data-target="weekly" aria-label="View weekly overview as table">View as table</button>
       </div>
     </div>
+    <div class="scope-line">Ignores the date-range chips above — navigated by its own <b>Week/Month</b> controls instead.</div>
     <div class="legend" id="timelineLegend" style="display:none"></div>
+    <div class="legend" id="compareLegend" style="display:none"></div>
     <div class="chart-wrap" id="weeklyChartWrap" data-view="chart">
       <svg class="chart-svg" id="weeklySvg" viewBox="0 0 1040 260" preserveAspectRatio="xMidYMid meet"></svg>
       <svg class="chart-svg" id="timelineSvg" viewBox="0 0 1040 320" preserveAspectRatio="xMidYMid meet" style="display:none"></svg>
@@ -148,11 +178,63 @@
     </div>
   </div>
 
-  <div class="card">
+  <div class="section-label">Always current</div>
+
+  <div class="card tier-none">
+    <div class="card-header">
+      <div class="titles">
+        <h2>Weekly target</h2>
+        <div class="caption" id="targetCaption">Hours worked</div>
+        <span class="scope-badge tier-none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18M3 12h18" stroke-dasharray="2 3"></path></svg>
+          Always this week
+        </span>
+      </div>
+    </div>
+    <div class="scope-line">Ignores every filter above except the device picker — always this calendar week's <b>work</b> time.</div>
+    <div class="stat-grid" id="targetStatGrid"></div>
+    <div class="chart-wrap">
+      <svg class="chart-svg" id="targetProgressSvg" viewBox="0 0 1040 56" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+    <div class="card-header" style="margin-top: 4px;">
+      <div class="titles">
+        <h2 style="font-size: 13px;">Flex-time balance</h2>
+        <div class="caption" id="balanceCaption">Hours over or under target per week</div>
+      </div>
+    </div>
+    <div class="chart-wrap">
+      <svg class="chart-svg" id="balanceSvg" viewBox="0 0 1040 220" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+  </div>
+
+  <div class="card tier-none">
+    <div class="card-header">
+      <div class="titles">
+        <h2>Daily rhythm</h2>
+        <div class="caption" id="rhythmCaption">First to last activity, per day</div>
+        <span class="scope-badge tier-none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18M3 12h18" stroke-dasharray="2 3"></path></svg>
+          Always last 7 days
+        </span>
+      </div>
+    </div>
+    <div class="scope-line">Ignores every filter above except the device picker — always the last 7 active days, work or leisure.</div>
+    <div class="chart-wrap">
+      <svg class="chart-svg" id="rhythmSvg" viewBox="0 0 1040 220" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+  </div>
+
+  <div class="section-label">History</div>
+
+  <div class="card tier-full">
     <div class="card-header">
       <div class="titles">
         <h2>Daily hours trend</h2>
         <div class="caption" id="trendCaption"></div>
+        <span class="scope-badge tier-full">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 4h16M7 4v16M17 4v16"></path></svg>
+          Uses filters above
+        </span>
       </div>
       <div class="card-controls">
         <button class="table-toggle" data-target="trend" aria-label="View daily hours trend as table">View as table</button>
@@ -164,11 +246,15 @@
     </div>
   </div>
 
-  <div class="card">
+  <div class="card tier-full">
     <div class="card-header">
       <div class="titles">
         <h2>Session log</h2>
         <div class="caption" id="sessionCaption">Individual tracked sessions in the selected range</div>
+        <span class="scope-badge tier-full">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 4h16M7 4v16M17 4v16"></path></svg>
+          Uses filters above
+        </span>
       </div>
     </div>
     <div class="data-table-wrap" style="display:block" id="sessionTableWrap"></div>
@@ -204,6 +290,18 @@
       <label for="deviceStaleThresholdHours">Device stale warning (hours)</label>
       <input type="number" id="deviceStaleThresholdHours" min="1" step="1">
       <div class="hint">Warn on the dashboard when a device hasn't checked in for this long.</div>
+    </div>
+
+    <div class="field">
+      <label for="weeklyTargetHours">Weekly target (hours)</label>
+      <input type="number" id="weeklyTargetHours" min="1" max="168" step="0.5">
+      <div class="hint">Work-time target for a full calendar week, spread evenly over Mon–Fri.</div>
+    </div>
+
+    <div class="field">
+      <label for="balanceWindowWeeks">Flex-balance window (weeks)</label>
+      <input type="number" id="balanceWindowWeeks" min="1" max="52" step="1">
+      <div class="hint">How many complete past weeks the carried flex-time balance sums over.</div>
     </div>
 
     <div class="modal-actions">

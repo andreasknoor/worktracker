@@ -160,6 +160,14 @@ tray shell) has never been run outside Windows — see
   `sessionsService.ts` folds in a synthetic orphaned-events entry only when
   there's no `?deviceId=` filter.
 
+- **The dashboard is one hand-written file.** `public/js/app.js` (~1900 lines,
+  plain script, no modules/bundler/lint step) plus `public/index.html` and
+  `public/css/styles.css`; charts are hand-built SVG, not a charting library.
+  View state (period, device filter, day/work type, theme) is persisted through a
+  guarded `localStorage` wrapper — it can throw in private browsing — and URL
+  query params deliberately override the stored value so a shared or bookmarked
+  link wins.
+
 ## Versioning
 
 The app version (`package.json`'s `version` field, mirrored in
@@ -181,6 +189,20 @@ independent build (`src/server/*.ts` in Vercel's per-file Node Function
 build without a guaranteed working-directory-relative read of
 `package.json`; the Windows tracker as its own .NET project outside the npm
 workspace).
+
+## Repo layout gotchas
+
+- **`handoff-package/` is a frozen pre-implementation snapshot**, not live code:
+  the specs as they stood before the rewrite, plus `reference-tests/*.cs` (C#
+  xUnit files kept only so test scenarios weren't lost) and the original
+  `dashboard-frontend/`. Its copies of the docs have drifted from `docs/` —
+  `docs/` is the only live version. Don't edit or "fix" anything under it.
+- **CI** (`.github/workflows/`): `node.yml` runs `npm ci && npm run build &&
+  npm run typecheck && npm test` on every push/PR; `mac-tracker.yml` runs
+  `swift build`/`swift test` on macOS, and `windows-tracker.yml` runs
+  `dotnet test` for `WorkTrackerTracker.Core` only — both path-filtered to their
+  own directory. There is no linter or formatter in this project; typecheck plus
+  the vitest suite are the whole gate.
 
 ## Documentation
 

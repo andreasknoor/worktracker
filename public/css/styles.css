@@ -25,6 +25,15 @@
   --success-text:   #006300;
   --danger-text:    #d03b3b;
   --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Filter-scope badge tiers (see docs/IMPLEMENTATION_NOTES.md D7):
+     full = respects every filter chip above; partial = respects some but has
+     its own period nav; none = ignores the filter row entirely. */
+  --tier-full:      #2a78d6;
+  --tier-full-bg:   #eaf2fc;
+  --tier-partial:   #a3671a;
+  --tier-partial-bg:#fbf0dd;
+  --tier-none:      #6b6a65;
+  --tier-none-bg:   #ecece8;
 }
 @media (prefers-color-scheme: dark) {
   :root:where(:not([data-theme="light"])) {
@@ -50,6 +59,12 @@
     --success-text:   #0ca30c;
     --danger-text:    #e66767;
     --status-warning: #ffb84d;
+    --tier-full:      #6badf5;
+    --tier-full-bg:   #142b47;
+    --tier-partial:   #e0ac52;
+    --tier-partial-bg:#3a2c10;
+    --tier-none:      #a5a49e;
+    --tier-none-bg:   #232320;
   }
 }
 :root[data-theme="dark"] {
@@ -75,6 +90,12 @@
   --success-text:   #0ca30c;
   --danger-text:    #e66767;
   --status-warning: #ffb84d;
+  --tier-full:      #6badf5;
+  --tier-full-bg:   #142b47;
+  --tier-partial:   #e0ac52;
+  --tier-partial-bg:#3a2c10;
+  --tier-none:      #a5a49e;
+  --tier-none-bg:   #232320;
 }
 
 * { box-sizing: border-box; }
@@ -331,6 +352,38 @@ header.app-header .subtitle {
   padding: 16px 16px 8px;
   margin-bottom: 16px;
 }
+/* Left edge repeats the .scope-badge tier as a fast-scan signal — see D7. */
+.card.tier-full { border-left: 3px solid var(--tier-full); }
+.card.tier-partial { border-left: 3px solid var(--tier-partial); }
+.card.tier-none { border-left: 3px solid var(--tier-none); }
+
+.scope-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+  margin-top: 6px;
+}
+.scope-badge svg { width: 11px; height: 11px; flex: none; }
+.scope-badge.tier-full { color: var(--tier-full); background: var(--tier-full-bg); }
+.scope-badge.tier-partial { color: var(--tier-partial); background: var(--tier-partial-bg); }
+.scope-badge.tier-none { color: var(--tier-none); background: var(--tier-none-bg); }
+
+.stat-grid-header { display: flex; justify-content: flex-end; margin-bottom: 6px; }
+
+.scope-line {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 4px 0 12px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--gridline);
+}
+.scope-line b { color: var(--text-secondary); font-weight: 600; }
+
 .card-header {
   display: flex;
   align-items: center;
@@ -471,6 +524,58 @@ table.data-table td.num, table.data-table th.num {
 }
 .target-line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
 .target-label { font-size: 10px; fill: var(--text-muted); }
+
+/* Weekly overview "compare with previous period" ghost bars */
+.bar-compare {
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+.compare-delta { font-size: 11px; font-variant-numeric: tabular-nums; text-anchor: middle; }
+.compare-delta.good { fill: var(--success-text); }
+.compare-delta.bad { fill: var(--danger-text); }
+
+/* Section grouping (dashboard grouped into "Right now" / "This week's
+   shape" / "History" zones) — a quiet label, not a navigation control, so
+   everything below stays reachable by plain scroll. */
+.section-label {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 24px 0 10px;
+}
+.section-label:first-child { margin-top: 0; }
+.section-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--gridline);
+}
+
+/* Weekly target & balance card */
+.target-progress-track { fill: var(--gridline); }
+.target-progress-fill { fill: var(--series-1); }
+.target-progress-marker { stroke: var(--text-primary); stroke-width: 2; }
+.target-progress-marker-label { font-size: 10px; fill: var(--text-secondary); }
+.balance-bar.good { fill: var(--series-3); }
+.balance-bar.bad { fill: var(--series-2); }
+.balance-bar.current { opacity: 0.55; }
+.balance-total-line { fill: none; stroke: var(--series-7); stroke-width: 2; stroke-linejoin: round; }
+.balance-total-dot { fill: var(--series-7); stroke: var(--surface-1); stroke-width: 2; }
+
+/* Daily rhythm (first-to-last-activity span) chart */
+.rhythm-span { fill: var(--series-1); opacity: 0.28; }
+.rhythm-span.is-today { fill: var(--series-4); opacity: 0.32; }
+.rhythm-dot { fill: var(--series-1); }
+.rhythm-dot.is-today { fill: var(--series-4); }
+.rhythm-median-line { stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 5 4; }
 
 /* Timeline (24h-per-day) view */
 .timeline-track { fill: var(--gridline); }

@@ -174,20 +174,36 @@ export class PostgresSettingsRepository implements SettingsRepository {
     const result = await this.pool.query<{ key: string; value: string }>(`SELECT key, value FROM settings`);
     const stored = Object.fromEntries(result.rows.map((r) => [r.key, r.value]));
     const staleThreshold = Number(stored["DeviceStaleThresholdHours"]);
+    const weeklyTargetHours = Number(stored["WeeklyTargetHours"]);
+    const balanceWindowWeeks = Number(stored["BalanceWindowWeeks"]);
     return {
       coreHoursStart: stored["CoreHoursStart"] ?? DEFAULT_GLOBAL_SETTINGS.coreHoursStart,
       coreHoursEnd: stored["CoreHoursEnd"] ?? DEFAULT_GLOBAL_SETTINGS.coreHoursEnd,
       deviceStaleThresholdHours: Number.isFinite(staleThreshold) && staleThreshold > 0
         ? staleThreshold
         : DEFAULT_GLOBAL_SETTINGS.deviceStaleThresholdHours,
+      weeklyTargetHours: Number.isFinite(weeklyTargetHours) && weeklyTargetHours > 0
+        ? weeklyTargetHours
+        : DEFAULT_GLOBAL_SETTINGS.weeklyTargetHours,
+      balanceWindowWeeks: Number.isInteger(balanceWindowWeeks) && balanceWindowWeeks > 0
+        ? balanceWindowWeeks
+        : DEFAULT_GLOBAL_SETTINGS.balanceWindowWeeks,
     };
   }
 
   async save(settings: GlobalSettings): Promise<GlobalSettings> {
     await this.pool.query(
-      `INSERT INTO settings (key, value) VALUES ('CoreHoursStart', $1), ('CoreHoursEnd', $2), ('DeviceStaleThresholdHours', $3)
+      `INSERT INTO settings (key, value) VALUES
+         ('CoreHoursStart', $1), ('CoreHoursEnd', $2), ('DeviceStaleThresholdHours', $3),
+         ('WeeklyTargetHours', $4), ('BalanceWindowWeeks', $5)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-      [settings.coreHoursStart, settings.coreHoursEnd, String(settings.deviceStaleThresholdHours)],
+      [
+        settings.coreHoursStart,
+        settings.coreHoursEnd,
+        String(settings.deviceStaleThresholdHours),
+        String(settings.weeklyTargetHours),
+        String(settings.balanceWindowWeeks),
+      ],
     );
     return settings;
   }

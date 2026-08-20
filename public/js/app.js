@@ -92,6 +92,7 @@
   const CORE_HOURS_ONLY_STORAGE_KEY = "wtk_timeline_core_hours_only";
   const DAY_TYPE_STORAGE_KEY = "wtk_day_type";
   const WORK_TYPE_STORAGE_KEY = "wtk_work_type";
+  const COMPARE_STORAGE_KEY = "wtk_compare_period";
 
   const state = {
     rangeDays: 7,        // used for stat tiles / trend / sessions; "all" resolves to a day count once first-activity is known
@@ -105,10 +106,13 @@
     coreHoursStartMinutes: 9 * 60,  // refreshed from settings; used by the timeline chart
     coreHoursEndMinutes: 18 * 60,
     deviceStaleThresholdHours: 24,  // refreshed from settings; used by the device health banner
+    weeklyTargetHours: 40,          // refreshed from settings; used by the weekly target/balance card
+    balanceWindowWeeks: 8,          // refreshed from settings; how many complete past weeks "carried balance" sums over
     selectedDeviceId: safeGetItem(DEVICE_STORAGE_KEY) || "", // "" = all devices combined
     timelineCoreHoursOnly: safeGetItem(CORE_HOURS_ONLY_STORAGE_KEY) === "1", // crop the timeline y-axis to core hours ± 1h
     dayType: safeGetItem(DAY_TYPE_STORAGE_KEY) || "all", // "all" | "weekday" | "weekend"
     workType: safeGetItem(WORK_TYPE_STORAGE_KEY) || "all", // "all" | "work" | "leisure"
+    compareEnabled: safeGetItem(COMPARE_STORAGE_KEY) === "1", // ghost bars for the previous period on the weekly overview chart
   };
 
   function setSelectedDeviceId(deviceId) {
@@ -328,6 +332,25 @@
     });
   }
 
+  // Weekly target/balance always measures *work* time against the target,
+  // regardless of the global "work/leisure" filter chip — deliberately not
+  // routed through withStatsParams (which would apply state.workType and
+  // state.dayType), same reasoning as fetchFirstActivity() above. Device
+  // filtering still applies, since "is this device's balance on track" is a
+  // legitimate question.
+  async function fetchWeekForBalance(mondayDate) {
+    const params = withDeviceParam(new URLSearchParams({ start: isoDate(mondayDate), workType: "work" }));
+    return fetchJson("/api/stats/week?" + params.toString());
+  }
+
+  // The daily-rhythm chart wants the real first-to-last-activity span of a
+  // day, so — like fetchWeekForBalance above — it deliberately bypasses the
+  // dayType/workType filter chips (only the device filter still applies).
+  async function fetchWeekTimelineForRhythm(mondayDate) {
+    const params = withDeviceParam(new URLSearchParams({ start: isoDate(mondayDate) }));
+    return fetchJson("/api/stats/week-timeline?" + params.toString());
+  }
+
   /* ---------- Stat tiles ---------- */
 
   async function renderStatTiles() {
@@ -458,14 +481,18 @@
     totalsSvg.style.display = showTimeline ? "none" : "";
     timelineSvg.style.display = showTimeline ? "" : "none";
     document.getElementById("coreHoursOnlyLabel").style.display = showTimeline ? "" : "none";
+    // Comparison is a totals-chart feature only — a "previous period" ghost
+    // timeline would double the segment density and isn't legible.
+    document.getElementById("comparePeriodLabel").style.display = showTimeline ? "none" : "";
 
-    let days, rangeLabel;
+    let days, rangeLabel, compareAnchor;
     if (isMonth) {
       const anchor = new Date(today.getFullYear(), today.getMonth() + state.monthOffset, 1);
       const monthData = await fetchMonth(anchor);
       days = monthData.days.map(d => ({ date: parseIsoDate(d.date), hours: d.hours }));
       rangeLabel = anchor.toLocaleDateString("en-US", { month: "long", year: "numeric" });
       document.getElementById("periodNext").disabled = state.monthOffset >= 0;
+      compareAnchor = new Date(anchor.getFullYear(), anchor.getMonth() - 1, 1);
     } else {
       const baseMonday = mondayOf(today);
       const monday = new Date(baseMonday);
@@ -475,6 +502,8 @@
       const sunday = new Date(monday); sunday.setDate(sunday.getDate() + 6);
       rangeLabel = formatShortDate(monday) + " – " + formatShortDate(sunday);
       document.getElementById("periodNext").disabled = state.weekOffset >= 0;
+      compareAnchor = new Date(monday);
+      compareAnchor.setDate(compareAnchor.getDate() - 7);
     }
 
     document.getElementById("periodRange").textContent = rangeLabel;
@@ -486,21 +515,44 @@
     document.getElementById("weeklySummaryLine").textContent =
       "Total " + fmtHours(periodTotalHours) + " · Avg " + fmtHours(periodAvgHours) + "/day";
 
+    const compareLegend = document.getElementById("compareLegend");
     if (showTimeline) {
+      compareLegend.style.display = "none";
       await renderTimelineChart();
       return;
+    }
+
+    // Previous-period comparison: same query as `days`, one period earlier,
+    // aligned by array index (day-of-week for a week, day-of-month for a
+    // month) — see the `compareDays[i]` guard below for what happens when a
+    // shorter previous month runs out of days to align against.
+    const compareOn = state.compareEnabled;
+    let compareDays = null;
+    if (compareOn) {
+      const compareData = isMonth ? await fetchMonth(compareAnchor) : await fetchWeek(compareAnchor);
+      compareDays = compareData.days.map(d => ({ date: parseIsoDate(d.date), hours: d.hours }));
+    }
+    if (compareOn) {
+      compareLegend.style.display = "";
+      compareLegend.innerHTML =
+        '<span class="legend-item"><span class="swatch" style="background:var(--series-1)"></span>This ' + (isMonth ? "month" : "week") + '</span>' +
+        '<span class="legend-item"><span class="swatch" style="background:none;border:1.5px dashed var(--baseline);"></span>Previous ' + (isMonth ? "month" : "week") + '</span>';
+    } else {
+      compareLegend.style.display = "none";
     }
 
     const W = 1040, H = 260;
     const padL = 36, padR = 12, padT = 24, padB = 30;
     const plotW = W - padL - padR, plotH = H - padT - padB;
-    const maxHours = Math.max(9, Math.ceil(Math.max.apply(null, days.map(d => d.hours))));
+    const compareMaxHours = compareDays ? Math.max.apply(null, compareDays.map(d => d.hours)) : 0;
+    const maxHours = Math.max(9, Math.ceil(Math.max(Math.max.apply(null, days.map(d => d.hours)), compareMaxHours)));
     const targetHours = 8;
 
     const slotW = plotW / days.length;
     // Bars get thinner as more days share the same width (up to 24px for a week,
     // narrower for a 28-31 day month) — always leaving visible air between bars.
-    const barW = Math.min(24, slotW * 0.65);
+    // Narrower still when a ghost bar for the previous period shares the slot.
+    const barW = Math.min(24, slotW * (compareOn ? 0.5 : 0.65));
 
     function yFor(h) { return padT + plotH - (h / maxHours) * plotH; }
 
@@ -527,13 +579,25 @@
     // above every bar would collide once a month's 28-31 bars share this width.
     const labelEvery = isMonth ? Math.max(1, Math.round(days.length / 10)) : 1;
 
+    // With comparison on, the current-period bar shifts right and the
+    // previous-period ghost bar sits just left of it in the same slot.
+    const compareOffset = compareOn ? barW / 2 + 2 : 0;
+
     days.forEach((d, i) => {
       const cx = padL + slotW * i + slotW / 2;
-      const x = cx - barW / 2;
+      const x = cx - barW / 2 + compareOffset;
       const h = (d.hours / maxHours) * plotH;
       const y = baseY - h;
       const r = Math.min(4, h);
       const todayFlag = startOfDay(d.date).getTime() === today.getTime();
+      const cmp = compareOn && compareDays ? compareDays[i] : null;
+
+      if (cmp && cmp.hours > 0) {
+        const ch = (cmp.hours / maxHours) * plotH;
+        const cy = baseY - ch;
+        const gx = cx - barW / 2 - compareOffset;
+        parts.push('<rect class="bar-compare" x="' + gx.toFixed(1) + '" y="' + cy.toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + Math.max(ch, 1).toFixed(1) + '" rx="3"></rect>');
+      }
 
       if (h > 0.5) {
         parts.push(
@@ -544,6 +608,18 @@
           ' v' + (h - r).toFixed(1) +
           ' h-' + barW.toFixed(1) + ' z"></path>'
         );
+      }
+
+      // In month mode, only label every `labelEvery`-th day (same downsampling
+      // as the axis labels below) — a full month of daily deltas overlap into
+      // an unreadable smear otherwise. The exact value is always available on
+      // hover regardless.
+      if (cmp && (d.hours > 0 || cmp.hours > 0) && (i % labelEvery === 0 || i === days.length - 1)) {
+        const diff = d.hours - cmp.hours;
+        const cmpTopY = cmp.hours > 0 ? baseY - (cmp.hours / maxHours) * plotH : baseY;
+        const topY = Math.min(y, cmpTopY) - 8;
+        const sign = diff >= 0 ? "+" : "−";
+        parts.push('<text class="compare-delta ' + (diff >= 0 ? "good" : "bad") + '" x="' + cx.toFixed(1) + '" y="' + topY.toFixed(1) + '">' + sign + fmtHours(Math.abs(diff)) + '</text>');
       }
 
       const axisLabel = isMonth ? String(d.date.getDate()) : formatWeekday(d.date);
@@ -569,8 +645,10 @@
       const label = isMonth
         ? d.date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
         : formatWeekday(d.date) + ", " + formatShortDate(d.date);
-      showTooltip(svgRect.left + cx * scaleX, clientY,
-        label, d.hours > 0 ? fmtHours(d.hours) : "No activity");
+      const cmp = compareOn && compareDays ? compareDays[idx] : null;
+      const value = (d.hours > 0 ? fmtHours(d.hours) : "No activity") +
+        (cmp ? " (previous: " + (cmp.hours > 0 ? fmtHours(cmp.hours) : "no activity") + ")" : "");
+      showTooltip(svgRect.left + cx * scaleX, clientY, label, value);
       svg.querySelectorAll(".bar").forEach(b => b.classList.remove("active"));
       const bar = svg.querySelector('.bar[data-idx="' + idx + '"]');
       if (bar) bar.classList.add("active");
@@ -601,6 +679,246 @@
     ).join("");
     document.getElementById("weeklyTableWrap").innerHTML =
       '<table class="data-table"><thead><tr><th>Day</th><th class="num">Hours</th></tr></thead><tbody>' + rows + "</tbody></table>";
+  }
+
+  /* ---------- Weekly target & flex-time balance ---------- */
+
+  function buildMiniStatTile(grid, label, value, deltaText, deltaGood) {
+    const tile = document.createElement("div");
+    tile.className = "stat-tile";
+    const l = document.createElement("div");
+    l.className = "label";
+    l.textContent = label;
+    tile.appendChild(l);
+    const row = document.createElement("div");
+    row.className = "value-row";
+    const v = document.createElement("span");
+    v.className = "value";
+    v.textContent = value;
+    row.appendChild(v);
+    if (deltaText) {
+      const d = document.createElement("span");
+      d.className = "delta " + (deltaGood ? "up good" : "down bad");
+      d.textContent = deltaText;
+      row.appendChild(d);
+    }
+    tile.appendChild(row);
+    grid.appendChild(tile);
+  }
+
+  function fmtSignedHours(h) {
+    return (h >= 0 ? "+" : "−") + fmtHours(Math.abs(h));
+  }
+
+  async function renderTargetBalance() {
+    const currentMonday = mondayOf(today);
+    // mondays[0..balanceWindowWeeks-1] are complete past weeks, oldest first;
+    // the last entry is the current (partial) week — same order as the
+    // `weekTotals`/`deltas` arrays built from it below.
+    const mondays = [];
+    for (let w = state.balanceWindowWeeks; w >= 1; w--) {
+      const m = new Date(currentMonday);
+      m.setDate(m.getDate() - 7 * w);
+      mondays.push(m);
+    }
+    mondays.push(currentMonday);
+
+    const weeks = await Promise.all(mondays.map(fetchWeekForBalance));
+    const weekTotals = weeks.map(w => w.days.reduce((sum, d) => sum + d.hours, 0));
+    const currentWeekHours = weekTotals[weekTotals.length - 1];
+    const pastWeekTotals = weekTotals.slice(0, -1);
+
+    const target = state.weeklyTargetHours;
+    const dailyTarget = target / 5;
+    let elapsedWeekdays = 0;
+    for (let offset = 0; offset < 7; offset++) {
+      const d = new Date(currentMonday);
+      d.setDate(d.getDate() + offset);
+      if (d > today) break;
+      if (d.getDay() >= 1 && d.getDay() <= 5) elapsedWeekdays++;
+    }
+    const targetByNow = dailyTarget * elapsedWeekdays;
+    const weekBalance = currentWeekHours - targetByNow;
+    const carriedBalance = pastWeekTotals.reduce((sum, h) => sum + (h - target), 0);
+
+    const sunday = new Date(currentMonday);
+    sunday.setDate(sunday.getDate() + 6);
+    document.getElementById("targetCaption").textContent =
+      formatShortDate(currentMonday) + " – " + formatShortDate(sunday) + " · target " + fmtHours(target) + "/week";
+    document.getElementById("balanceCaption").textContent =
+      "Last " + state.balanceWindowWeeks + " complete weeks, plus this week so far — the line is the running total";
+
+    const grid = document.getElementById("targetStatGrid");
+    grid.innerHTML = "";
+    buildMiniStatTile(grid, "This week", fmtHours(currentWeekHours));
+    buildMiniStatTile(grid, "Target by now", fmtHours(targetByNow));
+    buildMiniStatTile(grid, "This week's balance", fmtSignedHours(weekBalance), weekBalance >= 0 ? "on track" : "behind", weekBalance >= 0);
+    buildMiniStatTile(grid, "Carried (" + state.balanceWindowWeeks + "wk)", fmtSignedHours(carriedBalance), null, carriedBalance >= 0);
+
+    // ---- progress bar (this week vs. target-by-now) ----
+    const progressSvg = document.getElementById("targetProgressSvg");
+    const PW = 1040, PY = 8, PH = 28;
+    const domain = Math.max(target, currentWeekHours, 1) * 1.05;
+    const fillWidth = Math.min(PW, (currentWeekHours / domain) * PW);
+    const markerX = Math.min(PW, (targetByNow / domain) * PW);
+    progressSvg.innerHTML =
+      '<rect class="target-progress-track" x="0" y="' + PY + '" width="' + PW + '" height="' + PH + '" rx="6"></rect>' +
+      '<rect class="target-progress-fill" x="0" y="' + PY + '" width="' + fillWidth.toFixed(1) + '" height="' + PH + '" rx="6"></rect>' +
+      '<line class="target-progress-marker" x1="' + markerX.toFixed(1) + '" y1="0" x2="' + markerX.toFixed(1) + '" y2="' + (PY + PH + 6) + '"></line>' +
+      '<text class="target-progress-marker-label" x="' + markerX.toFixed(1) + '" y="' + (PY + PH + 18) + '" text-anchor="' + (markerX > PW - 150 ? "end" : "middle") + '">target by now ' + fmtHours(targetByNow) + '</text>';
+    progressSvg.setAttribute("viewBox", "0 0 " + PW + " 56");
+    progressSvg.setAttribute("role", "img");
+    progressSvg.setAttribute("aria-label", "This week's progress: " + fmtHours(currentWeekHours) + " of a " + fmtHours(target) + " target.");
+
+    // ---- balance bar + running-total line chart ----
+    const deltas = pastWeekTotals.map(h => h - target).concat([weekBalance]);
+    let runningSoFar = 0;
+    const runningTotals = deltas.map(d => { runningSoFar += d; return runningSoFar; });
+
+    const bsvg = document.getElementById("balanceSvg");
+    const BW = 1040, BX0 = 54, BX1 = 1020, BY0 = 16, BY1 = 170;
+    const maxAbs = Math.max(60, Math.max.apply(null, deltas.concat(runningTotals).map(v => Math.abs(v))) * 1.2);
+    function byOf(v) { return (BY0 + BY1) / 2 - (v / maxAbs) * ((BY1 - BY0) / 2); }
+
+    const bparts = [];
+    [-maxAbs, -maxAbs / 2, 0, maxAbs / 2, maxAbs].forEach(v => {
+      const y = byOf(v);
+      bparts.push('<line class="' + (v === 0 ? "baseline" : "gridline") + '" x1="' + BX0 + '" y1="' + y.toFixed(1) + '" x2="' + BX1 + '" y2="' + y.toFixed(1) + '"></line>');
+      bparts.push('<text class="axis-label" x="' + (BX0 - 8) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end">' + (v === 0 ? "0" : fmtSignedHours(v)) + '</text>');
+    });
+
+    const band = (BX1 - BX0) / deltas.length;
+    const barW = Math.min(46, band * 0.5);
+    deltas.forEach((d, i) => {
+      const cx = BX0 + band * (i + 0.5);
+      const y0 = byOf(0), y1 = byOf(d);
+      const isCurrent = i === deltas.length - 1;
+      bparts.push('<rect class="balance-bar ' + (d >= 0 ? "good" : "bad") + (isCurrent ? " current" : "") + '" data-idx="' + i + '" x="' + (cx - barW / 2).toFixed(1) + '" y="' + Math.min(y0, y1).toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + Math.max(Math.abs(y1 - y0), 2).toFixed(1) + '" rx="3"></rect>');
+      bparts.push('<text class="axis-label" x="' + cx.toFixed(1) + '" y="' + (BY1 + 18) + '" text-anchor="middle">' + (isCurrent ? "this week" : formatShortDate(mondays[i])) + '</text>');
+    });
+
+    const pts = deltas.map((d, i) => [BX0 + band * (i + 0.5), byOf(runningTotals[i])]);
+    bparts.push('<path class="balance-total-line" d="' + pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ") + '"></path>');
+    pts.forEach((p, i) => {
+      bparts.push('<circle class="balance-total-dot" data-idx="' + i + '" cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="4"></circle>');
+    });
+
+    bsvg.innerHTML = bparts.join("");
+    bsvg.setAttribute("viewBox", "0 0 " + BW + " 220");
+    bsvg.setAttribute("role", "img");
+    bsvg.setAttribute("aria-label", "Flex-time balance over the last " + state.balanceWindowWeeks + " weeks plus this week, running total " + fmtSignedHours(runningTotals[runningTotals.length - 1]) + ".");
+
+    bsvg.querySelectorAll("[data-idx]").forEach(node => {
+      const idx = +node.getAttribute("data-idx");
+      const isCurrent = idx === deltas.length - 1;
+      const label = isCurrent ? "This week" : "Week of " + formatShortDate(mondays[idx]);
+      const value = fmtSignedHours(deltas[idx]) + " · running total " + fmtSignedHours(runningTotals[idx]);
+      node.addEventListener("pointermove", evt => showTooltip(evt.clientX, evt.clientY, label, value));
+      node.addEventListener("pointerleave", hideTooltip);
+    });
+  }
+
+  /* ---------- Daily rhythm (first-to-last-activity span) chart ---------- */
+
+  function median(values) {
+    if (!values.length) return null;
+    const sorted = values.slice().sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+
+  async function renderRhythm() {
+    const currentMonday = mondayOf(today);
+    const prevMonday = new Date(currentMonday);
+    prevMonday.setDate(prevMonday.getDate() - 7);
+
+    const [prevWeek, curWeek] = await Promise.all([
+      fetchWeekTimelineForRhythm(prevMonday),
+      fetchWeekTimelineForRhythm(currentMonday),
+    ]);
+
+    // Trailing 7 calendar days that actually have recorded activity — spans
+    // two fetched weeks so a Monday/Tuesday "today" still has a full week of
+    // history to show, without needing a dedicated backend endpoint (see D6
+    // in docs/IMPLEMENTATION_NOTES.md).
+    const candidates = prevWeek.days.concat(curWeek.days)
+      .map(d => ({ date: parseIsoDate(d.date), segments: d.segments }))
+      .filter(d => d.date <= today && d.segments.length > 0);
+    const rows = candidates.slice(-7).map(d => ({
+      date: d.date,
+      first: Math.min.apply(null, d.segments.map(s => s.startMinutes)),
+      last: Math.max.apply(null, d.segments.map(s => s.endMinutes)),
+      worked: d.segments.reduce((sum, s) => sum + (s.endMinutes - s.startMinutes), 0),
+    }));
+
+    document.getElementById("rhythmCaption").textContent = rows.length
+      ? "First to last activity · last " + rows.length + " day" + (rows.length === 1 ? "" : "s") + " with recorded activity"
+      : "No activity recorded yet";
+
+    const svg = document.getElementById("rhythmSvg");
+    if (!rows.length) {
+      svg.innerHTML = "";
+      return;
+    }
+
+    const medStart = median(rows.map(r => r.first));
+    const medEnd = median(rows.map(r => r.last));
+
+    const W = 1040, H = 220, X0 = 54, X1 = 1020, Y0 = 16, Y1 = 176;
+    const LO = 6 * 60, HI = 22 * 60;
+    function yOf(min) { return Y0 + ((Math.min(Math.max(min, LO), HI) - LO) / (HI - LO)) * (Y1 - Y0); }
+
+    const parts = [];
+    [6, 10, 14, 18, 22].forEach(h => {
+      const y = yOf(h * 60);
+      parts.push('<line class="gridline" x1="' + X0 + '" y1="' + y.toFixed(1) + '" x2="' + X1 + '" y2="' + y.toFixed(1) + '"></line>');
+      parts.push('<text class="axis-label" x="' + (X0 - 8) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end">' + formatMinutesAsClock(h * 60) + '</text>');
+    });
+
+    const band = (X1 - X0) / rows.length;
+    rows.forEach((r, i) => {
+      const cx = X0 + band * (i + 0.5);
+      const yS = yOf(r.first), yE = yOf(r.last);
+      const isToday = startOfDay(r.date).getTime() === today.getTime();
+      parts.push('<rect class="rhythm-span' + (isToday ? " is-today" : "") + '" x="' + (cx - 6).toFixed(1) + '" y="' + yS.toFixed(1) + '" width="12" height="' + Math.max(yE - yS, 3).toFixed(1) + '" rx="6"></rect>');
+      parts.push('<circle class="rhythm-dot' + (isToday ? " is-today" : "") + '" cx="' + cx.toFixed(1) + '" cy="' + yS.toFixed(1) + '" r="4"></circle>');
+      parts.push('<circle class="rhythm-dot' + (isToday ? " is-today" : "") + '" cx="' + cx.toFixed(1) + '" cy="' + yE.toFixed(1) + '" r="4"></circle>');
+      parts.push('<text class="axis-label" x="' + cx.toFixed(1) + '" y="' + (Y1 + 18) + '" text-anchor="middle">' + formatWeekday(r.date) + ' ' + formatShortDate(r.date) + '</text>');
+      parts.push('<rect class="hit-col" tabindex="0" data-idx="' + i + '" x="' + (X0 + band * i).toFixed(1) + '" y="' + Y0 + '" width="' + band.toFixed(1) + '" height="' + (Y1 - Y0) + '"></rect>');
+    });
+
+    if (medStart != null) {
+      const y = yOf(medStart);
+      parts.push('<line class="rhythm-median-line" x1="' + X0 + '" y1="' + y.toFixed(1) + '" x2="' + X1 + '" y2="' + y.toFixed(1) + '"></line>');
+      parts.push('<text class="axis-label" x="' + X1 + '" y="' + (y - 6).toFixed(1) + '" text-anchor="end">median start ' + formatMinutesAsClock(medStart) + '</text>');
+    }
+    if (medEnd != null) {
+      const y = yOf(medEnd);
+      parts.push('<line class="rhythm-median-line" x1="' + X0 + '" y1="' + y.toFixed(1) + '" x2="' + X1 + '" y2="' + y.toFixed(1) + '"></line>');
+      parts.push('<text class="axis-label" x="' + X1 + '" y="' + (y - 6).toFixed(1) + '" text-anchor="end">median end ' + formatMinutesAsClock(medEnd) + '</text>');
+    }
+
+    svg.innerHTML = parts.join("");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "Daily rhythm chart: first to last activity for the last " + rows.length + " days with recorded activity.");
+
+    svg.querySelectorAll(".hit-col").forEach(rect => {
+      const idx = +rect.getAttribute("data-idx");
+      const r = rows[idx];
+      function show(clientY) {
+        const svgRect = svg.getBoundingClientRect();
+        const scaleX = svgRect.width / W;
+        const cx = X0 + band * idx + band / 2;
+        showTooltip(svgRect.left + cx * scaleX, clientY,
+          formatWeekday(r.date) + ", " + formatShortDate(r.date),
+          formatMinutesAsClock(r.first) + " – " + formatMinutesAsClock(r.last) + " · " + fmtHours(r.worked / 60) + " worked");
+      }
+      rect.addEventListener("pointermove", evt => show(evt.clientY));
+      rect.addEventListener("pointerleave", hideTooltip);
+      rect.addEventListener("focus", () => show(rect.getBoundingClientRect().top));
+      rect.addEventListener("blur", hideTooltip);
+    });
   }
 
   /* ---------- Weekly timeline (24h-per-day) chart ---------- */
@@ -956,6 +1274,8 @@
     await Promise.all([
       renderStatTiles(),
       renderWeeklyChart(),
+      renderTargetBalance(),
+      renderRhythm(),
       renderTrendChart(),
       renderSessionTable(),
     ]);
@@ -1043,6 +1363,14 @@
   coreHoursOnlyToggle.addEventListener("change", () => {
     state.timelineCoreHoursOnly = coreHoursOnlyToggle.checked;
     safeSetItem(CORE_HOURS_ONLY_STORAGE_KEY, state.timelineCoreHoursOnly ? "1" : "0");
+    renderWeeklyChart();
+  });
+
+  const comparePeriodToggle = document.getElementById("comparePeriodToggle");
+  comparePeriodToggle.checked = state.compareEnabled;
+  comparePeriodToggle.addEventListener("change", () => {
+    state.compareEnabled = comparePeriodToggle.checked;
+    safeSetItem(COMPARE_STORAGE_KEY, state.compareEnabled ? "1" : "0");
     renderWeeklyChart();
   });
 
@@ -1161,6 +1489,8 @@
   const coreHoursStartInput = document.getElementById("coreHoursStart");
   const coreHoursEndInput = document.getElementById("coreHoursEnd");
   const deviceStaleThresholdHoursInput = document.getElementById("deviceStaleThresholdHours");
+  const weeklyTargetHoursInput = document.getElementById("weeklyTargetHours");
+  const balanceWindowWeeksInput = document.getElementById("balanceWindowWeeks");
   const toast = document.getElementById("toast");
 
   function showToast(message, isError) {
@@ -1176,6 +1506,8 @@
       coreHoursStartInput.value = settings.coreHoursStart;
       coreHoursEndInput.value = settings.coreHoursEnd;
       deviceStaleThresholdHoursInput.value = settings.deviceStaleThresholdHours;
+      weeklyTargetHoursInput.value = settings.weeklyTargetHours;
+      balanceWindowWeeksInput.value = settings.balanceWindowWeeks;
       openModal(overlay);
     } catch (err) {
       showToast("Could not load settings", true);
@@ -1195,16 +1527,30 @@
       showToast("Device stale warning must be a positive number of hours", true);
       return;
     }
+    const weeklyTargetHours = Number(weeklyTargetHoursInput.value);
+    if (!Number.isFinite(weeklyTargetHours) || weeklyTargetHours <= 0 || weeklyTargetHours > 168) {
+      showToast("Weekly target must be a positive number of hours, up to 168", true);
+      return;
+    }
+    const balanceWindowWeeks = Number(balanceWindowWeeksInput.value);
+    if (!Number.isInteger(balanceWindowWeeks) || balanceWindowWeeks <= 0 || balanceWindowWeeks > 52) {
+      showToast("Flex-balance window must be a whole number of weeks, up to 52", true);
+      return;
+    }
 
     try {
       const saved = await saveSettings({
         coreHoursStart: coreHoursStartInput.value,
         coreHoursEnd: coreHoursEndInput.value,
         deviceStaleThresholdHours: staleThresholdHours,
+        weeklyTargetHours: weeklyTargetHours,
+        balanceWindowWeeks: balanceWindowWeeks,
       });
       state.coreHoursStartMinutes = parseHHMMToMinutes(saved.coreHoursStart);
       state.coreHoursEndMinutes = parseHHMMToMinutes(saved.coreHoursEnd);
       state.deviceStaleThresholdHours = saved.deviceStaleThresholdHours;
+      state.weeklyTargetHours = saved.weeklyTargetHours;
+      state.balanceWindowWeeks = saved.balanceWindowWeeks;
       closeModal(overlay);
       showToast("Settings saved");
       renderAll();
@@ -1908,6 +2254,8 @@
           state.coreHoursStartMinutes = parseHHMMToMinutes(settings.coreHoursStart);
           state.coreHoursEndMinutes = parseHHMMToMinutes(settings.coreHoursEnd);
           state.deviceStaleThresholdHours = settings.deviceStaleThresholdHours;
+          state.weeklyTargetHours = settings.weeklyTargetHours;
+          state.balanceWindowWeeks = settings.balanceWindowWeeks;
           // The banner may already have rendered once using the built-in
           // default (24h) before this resolved — recompute now in case the
           // saved threshold differs.

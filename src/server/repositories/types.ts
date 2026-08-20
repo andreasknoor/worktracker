@@ -76,12 +76,23 @@ export interface GlobalSettings {
   coreHoursEnd: string; // "HH:mm"
   /** Hours since a device's `lastSeenAt` before the dashboard's health banner warns about it. */
   deviceStaleThresholdHours: number;
+  /** The work-time target for a full calendar week, used by the dashboard's weekly-target/balance card. */
+  weeklyTargetHours: number;
+  /**
+   * How many complete previous weeks the "carried balance" tile sums over.
+   * Deliberately a rolling window rather than a fixed start date — avoids
+   * needing to pick (and store) an arbitrary "balance tracking began here"
+   * date; see docs/IMPLEMENTATION_NOTES.md.
+   */
+  balanceWindowWeeks: number;
 }
 
 export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
   coreHoursStart: "09:00",
   coreHoursEnd: "18:00",
   deviceStaleThresholdHours: 24,
+  weeklyTargetHours: 40,
+  balanceWindowWeeks: 8,
 };
 
 export interface SettingsRepository {

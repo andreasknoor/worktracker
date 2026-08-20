@@ -533,8 +533,20 @@ export function createApp(deps: AppDependencies): Hono {
 
   app.put("/api/settings", async (c) => {
     const body = await c.req
-      .json<{ coreHoursStart?: string; coreHoursEnd?: string; deviceStaleThresholdHours?: number }>()
-      .catch(() => ({ coreHoursStart: undefined, coreHoursEnd: undefined, deviceStaleThresholdHours: undefined }));
+      .json<{
+        coreHoursStart?: string;
+        coreHoursEnd?: string;
+        deviceStaleThresholdHours?: number;
+        weeklyTargetHours?: number;
+        balanceWindowWeeks?: number;
+      }>()
+      .catch(() => ({
+        coreHoursStart: undefined,
+        coreHoursEnd: undefined,
+        deviceStaleThresholdHours: undefined,
+        weeklyTargetHours: undefined,
+        balanceWindowWeeks: undefined,
+      }));
     const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
 
     if (!body.coreHoursStart || !timePattern.test(body.coreHoursStart)) {
@@ -549,11 +561,19 @@ export function createApp(deps: AppDependencies): Hono {
     if (!Number.isFinite(body.deviceStaleThresholdHours) || (body.deviceStaleThresholdHours as number) <= 0) {
       return c.json({ error: "deviceStaleThresholdHours must be a positive number" }, 400);
     }
+    if (!Number.isFinite(body.weeklyTargetHours) || (body.weeklyTargetHours as number) <= 0 || (body.weeklyTargetHours as number) > 168) {
+      return c.json({ error: "weeklyTargetHours must be a positive number of at most 168" }, 400);
+    }
+    if (!Number.isInteger(body.balanceWindowWeeks) || (body.balanceWindowWeeks as number) <= 0 || (body.balanceWindowWeeks as number) > 52) {
+      return c.json({ error: "balanceWindowWeeks must be a positive integer of at most 52" }, 400);
+    }
 
     const saved = await deps.settings.save({
       coreHoursStart: body.coreHoursStart,
       coreHoursEnd: body.coreHoursEnd,
       deviceStaleThresholdHours: body.deviceStaleThresholdHours as number,
+      weeklyTargetHours: body.weeklyTargetHours as number,
+      balanceWindowWeeks: body.balanceWindowWeeks as number,
     });
     return c.json(saved);
   });

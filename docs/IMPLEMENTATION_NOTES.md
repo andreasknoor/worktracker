@@ -163,6 +163,56 @@ dashboard's `localStorage` — surfaces as a `404` the frontend can react to,
 rather than silently returning an empty "all zeros" result. The dashboard
 header has a matching device dropdown backed by `GET /api/devices`.
 
+## D6 — Weekly target/balance: rolling window, not a stored start date
+
+Added after v1: the dashboard's weekly-target card (`weeklyTargetHours`,
+`balanceWindowWeeks` in the global `settings` table) needed a "carried
+balance" figure — the flex-time surplus/deficit accumulated over past weeks.
+The original prototype considered persisting a fixed "balance tracking
+started here" date, but that needs a real decision (when did tracking
+start? does a day off zero it out?) with no good default, and once picked
+it's awkward to change later without the number jumping. Using a rolling
+window of `balanceWindowWeeks` complete weeks ending at the current week
+instead sidesteps the question entirely: it's just `sum(weekTotal -
+weeklyTargetHours)` over the last N *complete* weeks (the current, partial
+week is shown separately as its own "this week's balance" tile, pro-rated
+against elapsed weekdays so it doesn't read as a false deficit on a Tuesday
+morning). Both the target/balance card and the daily-rhythm card
+(`renderTargetBalance`/`renderRhythm` in `public/js/app.js`) are computed
+entirely client-side from the existing `/api/stats/week` and
+`/api/stats/week-timeline` endpoints — no new stats endpoints were added,
+since both derive from data those endpoints already return.
+
+## D7 — Filter scope: card order and the `.scope-badge` tiers
+
+Added after v1: the top filter row (date range, day type, work type) does
+not apply uniformly to every card, and that used to be invisible. Three
+tiers exist, driven by what each card's fetch call actually sends:
+
+- **`tier-full`** — Total hours/Avg/Active days/Longest session, Daily
+  hours trend, Session log. All go through `withStatsParams` in
+  `public/js/app.js`, so every filter chip applies.
+- **`tier-partial`** — Weekly overview. Also goes through
+  `withStatsParams`, so day type and work type apply, but the date-range
+  chips don't — the card has its own Week/Month + ‹ › navigator instead,
+  and always shows whatever period that's on regardless of "Last 7
+  days"/"This week"/etc. above.
+- **`tier-none`** — Weekly target/balance and Daily rhythm. Deliberately
+  bypass `withStatsParams` (via `fetchWeekForBalance`/
+  `fetchWeekTimelineForRhythm`), respecting only the device picker — see D6
+  above for why the target/balance card in particular needs to stay
+  work-time-only regardless of the work/leisure toggle.
+
+Two changes make this legible: the dashboard's card order now roughly
+follows filter reach (fully-filtered cards sit closest to the filter row;
+`tier-none` cards are grouped into their own "Always current" section
+rather than interleaved with filtered ones — but kept high on the page,
+not demoted to the bottom, since target/balance is exactly the kind of
+thing you'd check first regardless of any filter), and every card carries
+an explicit `.scope-badge` (plus a colored left edge on the `.card` for
+fast scanning). The badge exists because position alone can't distinguish
+`tier-partial` from `tier-none` — only the badge text can.
+
 ## Mac tracker: menu-bar icon invisible when run via `swift run`
 
 Not caught by the unit test suite (it only exercises `Config`,

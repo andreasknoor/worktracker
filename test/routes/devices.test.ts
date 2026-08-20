@@ -658,7 +658,7 @@ describe("Settings validation", () => {
     const response = await authed(ctx, "/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ coreHoursStart: "18:00", coreHoursEnd: "09:00", deviceStaleThresholdHours: 24 }),
+      body: JSON.stringify({ coreHoursStart: "18:00", coreHoursEnd: "09:00", deviceStaleThresholdHours: 24, weeklyTargetHours: 40, balanceWindowWeeks: 8 }),
     });
     expect(response.status).toBe(400);
   });
@@ -667,7 +667,7 @@ describe("Settings validation", () => {
     const response = await authed(ctx, "/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ coreHoursStart: "9am", coreHoursEnd: "18:00", deviceStaleThresholdHours: 24 }),
+      body: JSON.stringify({ coreHoursStart: "9am", coreHoursEnd: "18:00", deviceStaleThresholdHours: 24, weeklyTargetHours: 40, balanceWindowWeeks: 8 }),
     });
     expect(response.status).toBe(400);
   });
@@ -676,7 +676,7 @@ describe("Settings validation", () => {
     const response = await authed(ctx, "/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ coreHoursStart: "09:00", coreHoursEnd: "18:00", deviceStaleThresholdHours: 0 }),
+      body: JSON.stringify({ coreHoursStart: "09:00", coreHoursEnd: "18:00", deviceStaleThresholdHours: 0, weeklyTargetHours: 40, balanceWindowWeeks: 8 }),
     });
     expect(response.status).toBe(400);
   });
@@ -694,7 +694,7 @@ describe("Settings validation", () => {
     const putResponse = await authed(ctx, "/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ coreHoursStart: "08:30", coreHoursEnd: "16:45", deviceStaleThresholdHours: 6 }),
+      body: JSON.stringify({ coreHoursStart: "08:30", coreHoursEnd: "16:45", deviceStaleThresholdHours: 6, weeklyTargetHours: 35, balanceWindowWeeks: 6 }),
     });
     expect(putResponse.status).toBe(200);
 
@@ -703,12 +703,57 @@ describe("Settings validation", () => {
     expect(settings.coreHoursStart).toBe("08:30");
     expect(settings.coreHoursEnd).toBe("16:45");
     expect(settings.deviceStaleThresholdHours).toBe(6);
+    expect(settings.weeklyTargetHours).toBe(35);
+    expect(settings.balanceWindowWeeks).toBe(6);
   });
 
   it("defaults deviceStaleThresholdHours to 24 when nothing has been saved", async () => {
     const response = await authed(ctx, "/api/settings");
     const settings = await response.json();
     expect(settings.deviceStaleThresholdHours).toBe(24);
+  });
+
+  it("defaults weeklyTargetHours to 40 and balanceWindowWeeks to 8 when nothing has been saved", async () => {
+    const response = await authed(ctx, "/api/settings");
+    const settings = await response.json();
+    expect(settings.weeklyTargetHours).toBe(40);
+    expect(settings.balanceWindowWeeks).toBe(8);
+  });
+
+  it("rejects a non-positive weeklyTargetHours", async () => {
+    const response = await authed(ctx, "/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ coreHoursStart: "09:00", coreHoursEnd: "18:00", deviceStaleThresholdHours: 24, weeklyTargetHours: 0, balanceWindowWeeks: 8 }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a weeklyTargetHours above 168", async () => {
+    const response = await authed(ctx, "/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ coreHoursStart: "09:00", coreHoursEnd: "18:00", deviceStaleThresholdHours: 24, weeklyTargetHours: 200, balanceWindowWeeks: 8 }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a non-integer balanceWindowWeeks", async () => {
+    const response = await authed(ctx, "/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ coreHoursStart: "09:00", coreHoursEnd: "18:00", deviceStaleThresholdHours: 24, weeklyTargetHours: 40, balanceWindowWeeks: 2.5 }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a non-positive balanceWindowWeeks", async () => {
+    const response = await authed(ctx, "/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ coreHoursStart: "09:00", coreHoursEnd: "18:00", deviceStaleThresholdHours: 24, weeklyTargetHours: 40, balanceWindowWeeks: 0 }),
+    });
+    expect(response.status).toBe(400);
   });
 
   it("returns 400 instead of throwing on malformed JSON", async () => {
