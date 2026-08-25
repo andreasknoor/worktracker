@@ -217,8 +217,15 @@
           Always last 7 days
         </span>
       </div>
+      <div class="card-controls">
+        <div class="segmented" role="group" aria-label="Rhythm work type" id="rhythmWorkTypeGroup">
+          <button class="segmented-btn" data-rhythm-work-type="work" aria-pressed="true">Work</button>
+          <button class="segmented-btn" data-rhythm-work-type="leisure" aria-pressed="false">Leisure</button>
+          <button class="segmented-btn" data-rhythm-work-type="all" aria-pressed="false">Both</button>
+        </div>
+      </div>
     </div>
-    <div class="scope-line">Ignores every filter above except the device picker — always the last 7 active days, work or leisure.</div>
+    <div class="scope-line">Ignores every filter above except the device picker — always the last 7 active days matching its own <b>Work/Leisure/Both</b> control.</div>
     <div class="chart-wrap">
       <svg class="chart-svg" id="rhythmSvg" viewBox="0 0 1040 220" preserveAspectRatio="xMidYMid meet"></svg>
     </div>

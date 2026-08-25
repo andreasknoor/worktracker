@@ -92,6 +92,7 @@
   const CORE_HOURS_ONLY_STORAGE_KEY = "wtk_timeline_core_hours_only";
   const DAY_TYPE_STORAGE_KEY = "wtk_day_type";
   const WORK_TYPE_STORAGE_KEY = "wtk_work_type";
+  const RHYTHM_WORK_TYPE_STORAGE_KEY = "wtk_rhythm_work_type";
   const COMPARE_STORAGE_KEY = "wtk_compare_period";
 
   const state = {
@@ -112,6 +113,12 @@
     timelineCoreHoursOnly: safeGetItem(CORE_HOURS_ONLY_STORAGE_KEY) === "1", // crop the timeline y-axis to core hours ± 1h
     dayType: safeGetItem(DAY_TYPE_STORAGE_KEY) || "all", // "all" | "weekday" | "weekend"
     workType: safeGetItem(WORK_TYPE_STORAGE_KEY) || "all", // "all" | "work" | "leisure"
+    // Independent of the global work-type filter chip above — the rhythm
+    // card deliberately ignores that filter (see its scope-line), but still
+    // needs work/leisure separation of its own; defaults to "work" so
+    // personal/leisure activity doesn't skew the "when do I start/stop
+    // working" read by default.
+    rhythmWorkType: safeGetItem(RHYTHM_WORK_TYPE_STORAGE_KEY) || "work", // "work" | "leisure" | "all"
     compareEnabled: safeGetItem(COMPARE_STORAGE_KEY) === "1", // ghost bars for the previous period on the weekly overview chart
   };
 
@@ -132,6 +139,11 @@
   function setWorkType(workType) {
     state.workType = workType || "all";
     safeSetItem(WORK_TYPE_STORAGE_KEY, state.workType);
+  }
+
+  function setRhythmWorkType(workType) {
+    state.rhythmWorkType = VALID_WORK_TYPES.includes(workType) ? workType : "work";
+    safeSetItem(RHYTHM_WORK_TYPE_STORAGE_KEY, state.rhythmWorkType);
   }
 
   function setRangeFromParam(range) {
@@ -345,9 +357,11 @@
 
   // The daily-rhythm chart wants the real first-to-last-activity span of a
   // day, so — like fetchWeekForBalance above — it deliberately bypasses the
-  // dayType/workType filter chips (only the device filter still applies).
+  // global dayType/workType filter chips (only the device filter still
+  // applies), but has its own work/leisure/both control (state.rhythmWorkType).
   async function fetchWeekTimelineForRhythm(mondayDate) {
     const params = withDeviceParam(new URLSearchParams({ start: isoDate(mondayDate) }));
+    if (state.rhythmWorkType !== "all") params.set("workType", state.rhythmWorkType);
     return fetchJson("/api/stats/week-timeline?" + params.toString());
   }
 
@@ -851,9 +865,10 @@
       worked: d.segments.reduce((sum, s) => sum + (s.endMinutes - s.startMinutes), 0),
     }));
 
+    const scopeLabel = state.rhythmWorkType === "work" ? "work" : state.rhythmWorkType === "leisure" ? "leisure" : "work or leisure";
     document.getElementById("rhythmCaption").textContent = rows.length
-      ? "First to last activity · last " + rows.length + " day" + (rows.length === 1 ? "" : "s") + " with recorded activity"
-      : "No activity recorded yet";
+      ? "First to last activity (" + scopeLabel + ") · last " + rows.length + " day" + (rows.length === 1 ? "" : "s") + " with recorded activity"
+      : "No " + scopeLabel + " activity recorded yet";
 
     const svg = document.getElementById("rhythmSvg");
     if (!rows.length) {
@@ -910,9 +925,10 @@
         const svgRect = svg.getBoundingClientRect();
         const scaleX = svgRect.width / W;
         const cx = X0 + band * idx + band / 2;
+        const label = state.rhythmWorkType === "work" ? "worked" : state.rhythmWorkType === "leisure" ? "leisure" : "tracked";
         showTooltip(svgRect.left + cx * scaleX, clientY,
           formatWeekday(r.date) + ", " + formatShortDate(r.date),
-          formatMinutesAsClock(r.first) + " – " + formatMinutesAsClock(r.last) + " · " + fmtHours(r.worked / 60) + " worked");
+          formatMinutesAsClock(r.first) + " – " + formatMinutesAsClock(r.last) + " · " + fmtHours(r.worked / 60) + " " + label);
       }
       rect.addEventListener("pointermove", evt => show(evt.clientY));
       rect.addEventListener("pointerleave", hideTooltip);
@@ -1321,6 +1337,20 @@
       setWorkType(btn.getAttribute("data-work-type"));
       updateUrlFromState();
       renderAll();
+    });
+  });
+
+  const rhythmWorkTypeGroup = document.getElementById("rhythmWorkTypeGroup");
+  rhythmWorkTypeGroup.querySelectorAll(".segmented-btn").forEach(btn => {
+    if (btn.getAttribute("data-rhythm-work-type") === state.rhythmWorkType) {
+      rhythmWorkTypeGroup.querySelectorAll(".segmented-btn").forEach(b => b.setAttribute("aria-pressed", "false"));
+      btn.setAttribute("aria-pressed", "true");
+    }
+    btn.addEventListener("click", () => {
+      rhythmWorkTypeGroup.querySelectorAll(".segmented-btn").forEach(b => b.setAttribute("aria-pressed", "false"));
+      btn.setAttribute("aria-pressed", "true");
+      setRhythmWorkType(btn.getAttribute("data-rhythm-work-type"));
+      renderRhythm();
     });
   });
 
