@@ -2313,5 +2313,17 @@
       renderAllWithAuthHandling();
 
       window.addEventListener("resize", () => renderAll().catch(() => {}));
+
+      // Keeps the charts/tiles from going stale on a long-lived open tab —
+      // renderAll() is otherwise only triggered by user interaction. Paired
+      // with a visibilitychange refresh so a tab that was backgrounded (or
+      // the machine was asleep) catches up immediately on return instead of
+      // waiting up to a minute.
+      setInterval(renderAllWithAuthHandling, 60000);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+          renderAllWithAuthHandling();
+        }
+      });
     });
 })();
