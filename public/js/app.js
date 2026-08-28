@@ -1431,10 +1431,6 @@
 
   const THEME_STORAGE_KEY = "worktracker-theme";
 
-  function systemPrefersDark() {
-    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-  }
-
   function loadStoredTheme() {
     const stored = safeGetItem(THEME_STORAGE_KEY);
     return stored === "dark" || stored === "light" ? stored : null;
@@ -1444,7 +1440,9 @@
     safeSetItem(THEME_STORAGE_KEY, theme);
   }
 
-  let currentTheme = loadStoredTheme() ?? (systemPrefersDark() ? "dark" : "light");
+  // No system-preference fallback here on purpose — this dashboard defaults
+  // to dark mode until the user explicitly picks a theme via the toggle.
+  let currentTheme = loadStoredTheme() ?? "dark";
   document.documentElement.setAttribute("data-theme", currentTheme);
 
   function updateThemeIcon() {
