@@ -776,3 +776,41 @@ footer.notes {
   color: var(--text-muted);
   line-height: 1.5;
 }
+
+/* Mobile layout (phones, ≤700px). Everything above already wraps
+   reasonably at this width except .card-header: it's a plain
+   space-between flex row, so on a narrow viewport its .card-controls
+   (segmented groups, checkboxes, period nav, table-toggle) get squeezed
+   into one unreadable, overflowing line instead of wrapping. Below that,
+   .modal has a fixed pixel width that overflows small screens, and
+   .data-table-wrap has no horizontal-scroll fallback for wide tables. */
+@media (max-width: 700px) {
+  body { padding: 16px 12px 48px; }
+
+  header.app-header { flex-wrap: wrap; row-gap: 12px; }
+  .header-actions { flex-wrap: wrap; }
+
+  .live-ring-bar { padding: 16px; gap: 20px; justify-content: center; }
+
+  .card-header {
+    flex-direction: column;
+    align-items: flex-start;
+    row-gap: 10px;
+  }
+  .card-controls {
+    width: 100%;
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .week-range { min-width: 0; }
+
+  .data-table-wrap { overflow-x: auto; }
+  table.data-table { min-width: 480px; }
+
+  .modal-overlay { padding: 16px; }
+  .modal,
+  #devicesOverlay .modal {
+    width: 100%;
+    max-width: 360px;
+  }
+}
