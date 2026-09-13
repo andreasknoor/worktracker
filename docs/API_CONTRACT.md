@@ -16,6 +16,18 @@ All dates are `"yyyy-MM-dd"` strings; all times within a day are `"HH:mm"` 24h s
 }
 ```
 
+### `GET /api/stats/weeks?start=yyyy-MM-dd&count=n`
+Batched form of `/api/stats/week`: returns `count` (1-52) consecutive weeks starting at `start` in one response, computing the combined range once server-side instead of once per week. Added for the dashboard's target-balance chart, which otherwise needed `balanceWindowWeeks + 1` separate `/api/stats/week` calls on every refresh — see `docs/IMPLEMENTATION_NOTES.md` ("Dashboard polling exceeded Neon's free-tier network transfer allowance"). `count` defaults to `1` if omitted.
+```json
+{
+  "weeks": [
+    { "weekStart": "2026-02-23", "weekEndExclusive": "2026-03-02", "days": [{ "date": "2026-02-23", "hours": 7.5 }, ...] },
+    { "weekStart": "2026-03-02", "weekEndExclusive": "2026-03-09", "days": [...] },
+    ...
+  ]
+}
+```
+
 ### `GET /api/stats/week-timeline?start=yyyy-MM-dd`
 Same week window, but per-day clock-time segments instead of totals (for the "Timeline" chart mode). Each segment additionally carries `deviceIds`: the device(s) active during that exact sub-slice — one id if only one device was active, two or more if they overlapped (used to color the aggregated Timeline chart per device, with a neutral color for the multi-device case; see "Device attribution" below).
 ```json
@@ -197,7 +209,7 @@ An unknown or malformed id returns `404` rather than silently empty data. See
 
 ## Day-type filtering
 
-`GET /api/stats/week`, `/week-timeline`, `/month`, `/summary`, and
+`GET /api/stats/week`, `/weeks`, `/week-timeline`, `/month`, `/summary`, and
 `/sessions` accept an optional `?dayType=all|weekday|weekend` query param
 (default `all`). `weekday` scopes to Mon-Fri, `weekend` to Sat-Sun. An
 unrecognized value returns `400`. Endpoints that return a fixed calendar
@@ -211,7 +223,7 @@ on a matching day. `live` and `first-activity` don't accept this param — a
 ## Work/leisure filtering
 
 A second, independent filter dimension from day-type above: `GET
-/api/stats/week`, `/week-timeline`, `/month`, `/summary`, and `/sessions`
+/api/stats/week`, `/weeks`, `/week-timeline`, `/month`, `/summary`, and `/sessions`
 additionally accept `?workType=work|leisure|all` (default `all`; `400` on an
 unrecognized value). `dayType` and `workType` can be combined — they're
 applied independently, not as alternatives.

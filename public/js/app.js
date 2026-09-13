@@ -350,13 +350,21 @@
   // state.dayType), same reasoning as fetchFirstActivity() above. Device
   // filtering still applies, since "is this device's balance on track" is a
   // legitimate question.
-  async function fetchWeekForBalance(mondayDate) {
-    const params = withDeviceParam(new URLSearchParams({ start: isoDate(mondayDate), workType: "work" }));
-    return fetchJson("/api/stats/week?" + params.toString());
+  //
+  // Batched (one request for all balanceWindowWeeks + 1 weeks, not one per
+  // week) since renderTargetBalance() needs this on every refresh — see
+  // docs/IMPLEMENTATION_NOTES.md ("Dashboard polling exceeded Neon's
+  // free-tier network transfer allowance").
+  async function fetchWeeksForBalance(firstMondayDate, count) {
+    const params = withDeviceParam(
+      new URLSearchParams({ start: isoDate(firstMondayDate), count: String(count), workType: "work" }),
+    );
+    const data = await fetchJson("/api/stats/weeks?" + params.toString());
+    return data.weeks;
   }
 
   // The daily-rhythm chart wants the real first-to-last-activity span of a
-  // day, so — like fetchWeekForBalance above — it deliberately bypasses the
+  // day, so — like fetchWeeksForBalance above — it deliberately bypasses the
   // global dayType/workType filter chips (only the device filter still
   // applies), but has its own work/leisure/both control (state.rhythmWorkType).
   async function fetchWeekTimelineForRhythm(mondayDate) {
@@ -737,7 +745,7 @@
     }
     mondays.push(currentMonday);
 
-    const weeks = await Promise.all(mondays.map(fetchWeekForBalance));
+    const weeks = await fetchWeeksForBalance(mondays[0], mondays.length);
     const weekTotals = weeks.map(w => w.days.reduce((sum, d) => sum + d.hours, 0));
     const currentWeekHours = weekTotals[weekTotals.length - 1];
     const pastWeekTotals = weekTotals.slice(0, -1);
@@ -2127,6 +2135,10 @@
   }
 
   async function syncLive() {
+    // Skip while backgrounded — a forgotten hidden tab shouldn't keep polling
+    // the server at full rate. visibilitychange (below) catches it back up
+    // immediately once it's visible again.
+    if (document.visibilityState !== "visible") return;
     try {
       const data = await fetchLive();
       live.isActive = data.isActive;
@@ -2139,7 +2151,7 @@
       renderLive();
     } catch (err) {
       console.error(err);
-      // The live poll runs every 15s regardless of which card is visible, so it's
+      // The live poll runs every 30s while the tab is visible, so it's
       // the most likely place to first notice an expired session — route back to
       // login rather than silently failing this tile forever.
       if (err && err.status === 401) {
@@ -2266,7 +2278,7 @@
     .then(() => {
       syncLive();
       setInterval(tickLive, 1000);
-      setInterval(syncLive, 15000);
+      setInterval(syncLive, 30000);
       // Staleness is purely time-based (no new data needed to detect it), so
       // this recomputes from the already-fetched device list rather than
       // polling the API again — refreshDeviceFilterDropdown()'s own periodic
@@ -2295,6 +2307,10 @@
       syncFilterButtonsFromState();
 
       function renderAllWithAuthHandling() {
+        // Skip while backgrounded — same reasoning as syncLive() above. The
+        // visibilitychange handler below still catches this tab up
+        // immediately once it becomes visible again.
+        if (document.visibilityState !== "visible") return;
         renderAll().catch(err => {
           console.error(err);
           if (err && err.status === 401) {
@@ -2317,7 +2333,7 @@
       // with a visibilitychange refresh so a tab that was backgrounded (or
       // the machine was asleep) catches up immediately on return instead of
       // waiting up to a minute.
-      setInterval(renderAllWithAuthHandling, 60000);
+      setInterval(renderAllWithAuthHandling, 300000);
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") {
           renderAllWithAuthHandling();

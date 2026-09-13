@@ -103,6 +103,46 @@ describe("StatsEndpointsTests", () => {
     expect(week.days[6].date).toBe("2026-03-15");
   });
 
+  it("GetWeeks_ReturnsConsecutiveWeeksMatchingIndividualWeekCalls", async () => {
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    // 8-hour session on the Monday of the second requested week, so at least
+    // one of the batched weeks has non-zero hours to compare against.
+    const timestamps: number[] = [];
+    for (let minute = 0; minute <= 8 * 60; minute += 20) {
+      timestamps.push(today.getTime() + 7 * 24 * 60 * MINUTE + 9 * 60 * MINUTE + minute * MINUTE);
+    }
+    await seedDeviceWithEvents(ctx, timestamps);
+
+    const batched = await authedGet(ctx, "/api/stats/weeks?start=2026-03-09&count=3");
+    expect(batched.status).toBe(200);
+    const batchedBody = await batched.json();
+    expect(batchedBody.weeks).toHaveLength(3);
+
+    for (const week of batchedBody.weeks) {
+      const single = await authedGet(ctx, `/api/stats/week?start=${week.weekStart}`);
+      expect(single.status).toBe(200);
+      const singleBody = await single.json();
+      expect(week).toEqual(singleBody);
+    }
+  });
+
+  it("rejects a count outside 1-52 on /api/stats/weeks", async () => {
+    const tooMany = await authedGet(ctx, "/api/stats/weeks?start=2026-03-09&count=53");
+    expect(tooMany.status).toBe(400);
+
+    const zero = await authedGet(ctx, "/api/stats/weeks?start=2026-03-09&count=0");
+    expect(zero.status).toBe(400);
+  });
+
+  it("defaults count to 1 on /api/stats/weeks", async () => {
+    const response = await authedGet(ctx, "/api/stats/weeks?start=2026-03-09");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.weeks).toHaveLength(1);
+    expect(body.weeks[0].weekStart).toBe("2026-03-09");
+  });
+
   it("GetWeekTimeline_ReturnsPerDaySegmentsInMinutesSinceMidnight", async () => {
     const monday = Date.UTC(2026, 2, 9); // a Monday
 
@@ -290,6 +330,11 @@ describe("stats query param validation", () => {
 
   it("rejects a missing start date on /api/stats/week", async () => {
     const response = await authedGet(ctx, "/api/stats/week");
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a missing start date on /api/stats/weeks", async () => {
+    const response = await authedGet(ctx, "/api/stats/weeks");
     expect(response.status).toBe(400);
   });
 

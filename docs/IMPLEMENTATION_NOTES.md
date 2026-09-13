@@ -289,6 +289,47 @@ needs an interactive sudo password the agent can't supply — worked around
 with Microsoft's official `dotnet-install.sh`, which installs into
 `~/.dotnet` without admin rights (the same approach CI runners use).
 
+## Dashboard polling exceeded Neon's free-tier network transfer allowance
+
+**What happened:** the Neon project backing this app hit its 5 GB/month
+network transfer allowance in ~13 days. Neon's query-performance view showed
+~176,000 raw `activity_events` range-scan calls over that window against
+only 487 real tracker event inserts — the load was entirely dashboard
+polling, not tracker ingestion.
+
+**Root causes, found by inspecting `public/js/app.js`:**
+
+1. Both polling intervals (`syncLive` every 15s, `renderAllWithAuthHandling`
+   every 60s, the latter added when dashboard auto-refresh was introduced)
+   ran unconditionally, including while the tab was hidden/backgrounded —
+   only a `visibilitychange` listener existed to catch a *returning* tab up
+   immediately, nothing paused the background polling itself.
+2. `renderTargetBalance()` fanned out into `state.balanceWindowWeeks + 1`
+   (9, by default) separate `/api/stats/week` requests on every single
+   refresh, each triggering its own from-scratch raw-event range scan per
+   device server-side — even though 8 of those 9 weeks are already-elapsed
+   and never change between refreshes.
+
+**Fix:**
+
+- Both intervals now check `document.visibilityState !== "visible"` and
+  skip when backgrounded; `syncLive` slowed to 30s and
+  `renderAllWithAuthHandling` to 5 minutes while visible (the
+  `visibilitychange` immediate-refresh on tab return is unchanged, so
+  perceived staleness on return is still ~0).
+- Added `GET /api/stats/weeks` (`src/server/app.ts`), which computes the
+  entire multi-week balance-window range in one pass per device (one
+  `getEventsInRangeForDevice` call instead of nine overlapping ones) and
+  buckets the result into per-week day arrays server-side, reusing the same
+  `dailyHours`/`filterDailyHours` logic `/api/stats/week` already used.
+  `renderTargetBalance()` now calls this once instead of fanning out
+  `Promise.all` over every week individually. See `docs/API_CONTRACT.md`.
+- Not done (deliberately, for now): no server-side caching layer, no
+  materialized aggregate table. At this app's single-user scale, removing
+  the background-tab polling and the N+1 week fan-out should be enough
+  headroom; adding a cache would be premature complexity unless usage data
+  after this fix says otherwise.
+
 ## Not yet implemented
 
 - Everything under "Windows tracker" above that requires an actual Windows

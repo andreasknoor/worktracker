@@ -309,6 +309,60 @@ export function createApp(deps: AppDependencies): Hono {
     });
   });
 
+  /**
+   * Batched form of `/api/stats/week`: returns `count` consecutive weeks
+   * starting at `start` in one response. Exists for the dashboard's target
+   * balance chart, which otherwise needs `balanceWindowWeeks + 1` (default
+   * 9) separate week requests every refresh — each re-scanning raw events
+   * from scratch per device. This computes the whole combined range once
+   * per device (one `getEventsInRangeForDevice` call instead of nine
+   * overlapping ones) and buckets the result into per-week day arrays
+   * server-side, reusing the same `dailyHours`/`filterDailyHours` logic
+   * `/api/stats/week` uses. See docs/IMPLEMENTATION_NOTES.md.
+   */
+  app.get("/api/stats/weeks", async (c) => {
+    const deviceId = await resolveDeviceIdFilter(c, deps.devices);
+    if (deviceId instanceof Response) return deviceId;
+    const dayType = parseDayType(c);
+    if (dayType instanceof Response) return dayType;
+    const workType = parseWorkType(c);
+    if (workType instanceof Response) return workType;
+
+    const start = c.req.query("start");
+    if (!isValidDateKey(start)) {
+      return c.json({ error: "start must be a valid yyyy-MM-dd date" }, 400);
+    }
+    const countRaw = c.req.query("count");
+    const count = countRaw === undefined ? 1 : Number(countRaw);
+    if (!Number.isInteger(count) || count < 1 || count > 52) {
+      return c.json({ error: "count must be an integer between 1 and 52" }, 400);
+    }
+    const endExclusive = addDays(start, count * 7);
+
+    const sessions = await getSessionsForRequest(
+      deps,
+      Date.parse(start + "T00:00:00Z"),
+      Date.parse(endExclusive + "T00:00:00Z"),
+      timeZone,
+      workType,
+      deviceId,
+    );
+    const daily = filterDailyHours(dailyHours(sessions, start, endExclusive, timeZone), dayType);
+
+    const weeks = [];
+    for (let w = 0; w < count; w++) {
+      const weekStart = addDays(start, w * 7);
+      const weekEndExclusive = addDays(weekStart, 7);
+      weeks.push({
+        weekStart,
+        weekEndExclusive,
+        days: daily.slice(w * 7, w * 7 + 7).map((d) => ({ date: d.date, hours: d.workedTimeMs / 3_600_000 })),
+      });
+    }
+
+    return c.json({ weeks });
+  });
+
   app.get("/api/stats/week-timeline", async (c) => {
     const deviceId = await resolveDeviceIdFilter(c, deps.devices);
     if (deviceId instanceof Response) return deviceId;

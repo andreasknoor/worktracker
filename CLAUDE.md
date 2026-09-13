@@ -113,7 +113,9 @@ tray shell) has never been run outside Windows — see
 - **Single catch-all Vercel Function.** All routes are bundled into one Hono
   app served by `api/index.ts`, not one file per endpoint — Vercel Hobby caps
   "one file = one Function" deployments at 12 Functions, and a single warm
-  instance matters since the dashboard polls `/api/stats/live` every 15s.
+  instance matters since the dashboard polls `/api/stats/live` every 30s
+  while the tab is visible (paused in background tabs — see
+  `docs/IMPLEMENTATION_NOTES.md`).
   `vercel.json` rewrites `/api/:path*` → `/api`.
 - **Time zone**: a single `APP_TIME_ZONE` env var (IANA, e.g. `Europe/Berlin`)
   is threaded explicitly through every day-boundary computation in
