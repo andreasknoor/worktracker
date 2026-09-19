@@ -4,6 +4,14 @@ enum APIClientError: Error {
     case invalidServerURL
     case unauthorized
     case requestFailed(statusCode: Int)
+
+    /// The server understood the request and refuses this data (malformed
+    /// or oversized batch). Retrying the identical payload can never
+    /// succeed, unlike a 5xx, 429 or network error.
+    var isPermanentRejection: Bool {
+        if case .requestFailed(let status) = self { return [400, 413, 422].contains(status) }
+        return false
+    }
 }
 
 /// Pushes activity timestamps to the server. Abstracted so `ActivityQueue`
@@ -37,6 +45,7 @@ final class URLSessionEventsAPIClient: EventsAPIClient {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = TrackerConstants.requestTimeoutSeconds
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode(

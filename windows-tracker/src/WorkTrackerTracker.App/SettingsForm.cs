@@ -30,7 +30,7 @@ internal sealed class SettingsForm : Form
         Font = new Font(FontFamily.GenericMonospace, 9),
     };
 
-    private readonly NumericUpDown _pollIntervalBox = new() { Minimum = 5, Maximum = 3600, Width = 100 };
+    private readonly NumericUpDown _pollIntervalBox = new() { Minimum = TrackerConstants.MinPollIntervalSeconds, Maximum = TrackerConstants.MaxPollIntervalSeconds, Width = 100 };
     private readonly CheckBox _startWithWindowsBox = new() { Text = "Start WorkTracker with Windows", AutoSize = true };
 
     public TrackerConfig Result { get; private set; } = TrackerConfig.Empty;
@@ -128,6 +128,6 @@ internal sealed class SettingsForm : Form
         Result = new TrackerConfig(
             _serverUrlBox.Text.Trim(),
             _apiKeyBox.Text.Trim(),
-            Math.Max(5, (int)_pollIntervalBox.Value));
+            Math.Max(TrackerConstants.MinPollIntervalSeconds, (int)_pollIntervalBox.Value));
     }
 }

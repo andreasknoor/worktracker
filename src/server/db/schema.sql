@@ -47,6 +47,12 @@ CREATE TABLE activity_events (
 CREATE INDEX activity_events_device_timestamp_idx ON activity_events (device_id, timestamp_utc);
 CREATE INDEX activity_events_timestamp_idx ON activity_events (timestamp_utc);
 
+-- Makes tracker retries idempotent: a batch re-sent after a timeout or a
+-- partially applied insert can't create duplicate rows (inserts use
+-- ON CONFLICT DO NOTHING). Orphaned rows (device_id NULL) are never
+-- considered equal by Postgres, which is fine — nothing re-sends for them.
+CREATE UNIQUE INDEX activity_events_device_timestamp_uniq ON activity_events (device_id, timestamp_utc);
+
 -- Global settings: only dashboard-display preferences remain global.
 -- idleThresholdMinutes / pollIntervalSeconds live on `devices` (see above).
 -- startWithWindows was dropped entirely (ambiguous in a multi-device model;

@@ -9,6 +9,7 @@ final class StatusBarController {
     private let statusMenuItem: NSMenuItem
     private let pendingMenuItem: NSMenuItem
     private let lastSyncMenuItem: NSMenuItem
+    private let errorMenuItem: NSMenuItem
     var onSettingsSaved: ((TrackerConfig) -> Void)?
 
     private var currentConfig: TrackerConfig
@@ -33,6 +34,8 @@ final class StatusBarController {
         statusMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         pendingMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         lastSyncMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        errorMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        errorMenuItem.isHidden = true
 
         statusItem.button?.image = NSImage(
             systemSymbolName: "stopwatch", accessibilityDescription: "WorkTracker"
@@ -42,6 +45,7 @@ final class StatusBarController {
         menu.addItem(statusMenuItem)
         menu.addItem(pendingMenuItem)
         menu.addItem(lastSyncMenuItem)
+        menu.addItem(errorMenuItem)
         menu.addItem(.separator())
 
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
@@ -56,7 +60,7 @@ final class StatusBarController {
         update(isActive: false, pendingCount: 0)
     }
 
-    func update(isActive: Bool, pendingCount: Int, lastSuccessfulSyncAt: Date? = nil) {
+    func update(isActive: Bool, pendingCount: Int, lastSuccessfulSyncAt: Date? = nil, lastError: String? = nil) {
         if let lastSuccessfulSyncAt {
             lastKnownSyncAt = lastSuccessfulSyncAt
         }
@@ -69,6 +73,8 @@ final class StatusBarController {
         pendingMenuItem.title = pendingCount == 0 ? "All events synced" : "\(pendingCount) event(s) queued"
         lastSyncMenuItem.title = lastKnownSyncAt.map { "Last synced: \(Self.lastSyncFormatter.string(from: $0))" }
             ?? "Last synced: never"
+        errorMenuItem.title = lastError.map { "⚠︎ Sync problem: \($0)" } ?? ""
+        errorMenuItem.isHidden = lastError == nil
 
         statusItem.button?.image = NSImage(
             systemSymbolName: isActive ? "stopwatch.fill" : "stopwatch",

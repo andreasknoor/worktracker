@@ -125,7 +125,8 @@ export class PostgresActivityEventsRepository implements ActivityEventsRepositor
       });
 
       await this.pool.query(
-        `INSERT INTO activity_events (device_id, timestamp_utc) VALUES ${values.join(", ")}`,
+        `INSERT INTO activity_events (device_id, timestamp_utc) VALUES ${values.join(", ")}
+         ON CONFLICT (device_id, timestamp_utc) DO NOTHING`,
         params,
       );
     }

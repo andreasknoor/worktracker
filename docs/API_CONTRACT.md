@@ -160,6 +160,8 @@ or a small batch (recommended, so a tracker can flush a short local queue after 
 ```
 - `401` if the API key is missing/invalid/revoked.
 - `400` if the batch exceeds 5000 timestamps in one request, or if none of the provided timestamps parse.
+- Ingestion is idempotent: `activity_events` has a unique index on `(device_id, timestamp_utc)` and inserts use `ON CONFLICT DO NOTHING`, so a tracker re-sending a batch after a timeout or partial failure creates no duplicates. **The migration `scripts/migrations/2026-09-19-unique-activity-events.mjs` must be run before deploying code that relies on this**, otherwise `ON CONFLICT` fails with a 500.
+- Trackers send at most 1000 timestamps per request (chunked), retry 5xx/network/401 with exponential backoff, and drop a chunk only on 400/413/422.
 - Server resolves the key to a `device_id`, inserts one row per timestamp into `activity_events`, and updates that device's `last_seen_at`.
 - `200`/`201` with an empty or minimal ack body — trackers don't need a rich response.
 

@@ -17,6 +17,8 @@ internal sealed class TrayIconController : IDisposable
     private readonly Icon _icon;
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _pendingItem;
+    private readonly ToolStripMenuItem _lastSyncItem;
+    private readonly ToolStripMenuItem _errorItem;
     private SettingsForm? _settingsForm;
 
     private TrackerConfig _currentConfig;
@@ -29,6 +31,8 @@ internal sealed class TrayIconController : IDisposable
 
         _statusItem = new ToolStripMenuItem { Enabled = false };
         _pendingItem = new ToolStripMenuItem { Enabled = false };
+        _lastSyncItem = new ToolStripMenuItem { Enabled = false };
+        _errorItem = new ToolStripMenuItem { Enabled = false, Visible = false };
 
         var settingsItem = new ToolStripMenuItem("Settings…");
         settingsItem.Click += (_, _) => OpenSettings();
@@ -39,6 +43,8 @@ internal sealed class TrayIconController : IDisposable
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusItem);
         menu.Items.Add(_pendingItem);
+        menu.Items.Add(_lastSyncItem);
+        menu.Items.Add(_errorItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(settingsItem);
         menu.Items.Add(new ToolStripSeparator());
@@ -103,12 +109,26 @@ internal sealed class TrayIconController : IDisposable
         public static extern bool DestroyIcon(IntPtr hIcon);
     }
 
-    public void Update(bool isActive, int pendingCount)
+    // Sticky across Update() calls that don't pass a fresh value (e.g. the
+    // settings-saved path), so the line doesn't flicker back to "never".
+    private DateTimeOffset? _lastKnownSyncAt;
+
+    public void Update(bool isActive, int pendingCount, DateTimeOffset? lastSuccessfulSyncAt = null, string? lastError = null)
     {
+        if (lastSuccessfulSyncAt is { } syncAt)
+        {
+            _lastKnownSyncAt = syncAt;
+        }
+
         _statusItem.Text = !_currentConfig.IsConfigured
             ? "Not configured — open Settings…"
             : isActive ? "Status: Active" : "Status: Idle";
         _pendingItem.Text = pendingCount == 0 ? "All events synced" : $"{pendingCount} event(s) queued";
+        _lastSyncItem.Text = _lastKnownSyncAt is { } last
+            ? $"Last synced: {last.LocalDateTime.ToString("g", System.Globalization.CultureInfo.CurrentCulture)}"
+            : "Last synced: never";
+        _errorItem.Text = lastError is null ? string.Empty : $"⚠ Sync problem: {lastError}";
+        _errorItem.Visible = lastError is not null;
     }
 
     private void OpenSettings()

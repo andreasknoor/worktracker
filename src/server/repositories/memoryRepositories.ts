@@ -88,6 +88,8 @@ export class InMemoryActivityEventsRepository implements ActivityEventsRepositor
 
   async insertEvents(deviceId: string, timestampsMs: readonly number[]): Promise<void> {
     for (const timestampMs of timestampsMs) {
+      // Mirrors the Postgres unique index on (device_id, timestamp_utc).
+      if (this.events.some((e) => e.deviceId === deviceId && e.timestampMs === timestampMs)) continue;
       this.events.push({ deviceId, timestampMs });
     }
   }

@@ -334,3 +334,32 @@ polling, not tracker ingestion.
 
 - Everything under "Windows tracker" above that requires an actual Windows
   machine to verify.
+
+## Tracker outage resilience (v1.20)
+
+Both trackers' `ActivityQueue` were reworked to lose no data during long
+server outages, and made behaviorally identical:
+
+- **Chunked flush** (1000 per request) with per-chunk removal. Before, the
+  whole queue went out as one request; above 5000 entries the server's
+  `400` made the Windows queue (unbounded) permanently stuck.
+- **Remove only what was sent** (sequence-number based). Before, success
+  cleared the whole list, dropping events enqueued during the request.
+- **Exponential backoff** (15 s → 300 s) on Windows too; single-flight guard;
+  30 s request timeout.
+- **Cap raised to 100 000** entries (was 5000 on Mac, unbounded on Windows);
+  overflow drops the oldest and is counted (`droppedEventCount`).
+- **Poison chunks** (400/413/422) are dropped, never retried forever; `401`
+  keeps the data and surfaces "API key invalid or revoked".
+- **Atomic, debounced persistence** on Windows (temp file + move, 5 s
+  debounce, `PersistNow()` on exit); write errors no longer crash the tray.
+- **Corrupt `queue.json`** is moved to `queue.json.corrupt` instead of being
+  overwritten by an empty queue.
+- **Status UI**: both show last sync and the last error. Mac gained a
+  single-instance `flock`.
+- **Server**: unique `(device_id, timestamp_utc)` index +
+  `ON CONFLICT DO NOTHING` makes retries idempotent.
+
+The on-disk `queue.json` format is unchanged (`{"pending": [...],
+"lastSuccessfulSyncAt": ...}`, plus the legacy bare array), so existing
+queues load as-is after an upgrade; covered by tests with a 3000-entry file.

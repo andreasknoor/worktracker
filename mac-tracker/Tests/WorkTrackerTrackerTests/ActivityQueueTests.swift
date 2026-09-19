@@ -3,12 +3,16 @@ import XCTest
 
 private final class FakeEventsAPIClient: EventsAPIClient {
     var shouldFail = false
+    var failure: APIClientError = .requestFailed(statusCode: 500)
+    /// Runs while a request is "in flight", to simulate activity arriving mid-flush.
+    var onPost: (() -> Void)?
     private(set) var receivedBatches: [[Date]] = []
 
     func postEvents(_ timestamps: [Date], serverBaseURL: String, apiKey: String) async throws {
         receivedBatches.append(timestamps)
+        onPost?()
         if shouldFail {
-            throw APIClientError.requestFailed(statusCode: 500)
+            throw failure
         }
     }
 }
@@ -299,5 +303,159 @@ final class ActivityQueueTests: XCTestCase {
         queue.enqueue(Date())
         await queue.flush(client: client, serverBaseURL: "https://example.vercel.app", apiKey: "k")
         XCTAssertEqual(queue.currentConsecutiveFailureCount, 1)
+    }
+
+    // MARK: - Outage resilience
+
+    private let url = "https://example.vercel.app"
+
+    func test_flush_sendsLargeBacklogInChunks_andClearsAll() async {
+        let queue = ActivityQueue(storageURL: tempURL, chunkSize: 100, persistDebounceInterval: 0)
+        for i in 0..<250 { queue.enqueue(Date(timeIntervalSince1970: TimeInterval(i))) }
+        let client = FakeEventsAPIClient()
+
+        await queue.flush(client: client, serverBaseURL: url, apiKey: "k")
+
+        XCTAssertEqual(client.receivedBatches.map(\.count), [100, 100, 50])
+        XCTAssertEqual(queue.pendingCount, 0)
+    }
+
+    func test_flush_failureMidBacklog_keepsOnlyUnsentChunks() async {
+        let queue = ActivityQueue(storageURL: tempURL, chunkSize: 100, persistDebounceInterval: 0)
+        for i in 0..<250 { queue.enqueue(Date(timeIntervalSince1970: TimeInterval(i))) }
+        let client = FakeEventsAPIClient()
+        var calls = 0
+        client.onPost = { calls += 1; client.shouldFail = calls >= 2 }
+
+        await queue.flush(client: client, serverBaseURL: url, apiKey: "k")
+
+        XCTAssertEqual(queue.pendingCount, 150, "first chunk acknowledged, the rest stay queued")
+        XCTAssertEqual(queue.pendingTimestamps.first, Date(timeIntervalSince1970: 100))
+    }
+
+    func test_flush_keepsEventsEnqueuedWhileRequestIsInFlight() async {
+        let queue = ActivityQueue(storageURL: tempURL, persistDebounceInterval: 0)
+        queue.enqueue(Date(timeIntervalSince1970: 1))
+        let client = FakeEventsAPIClient()
+        var injected = false
+        client.onPost = {
+            guard !injected else { return }
+            injected = true
+            queue.enqueue(Date(timeIntervalSince1970: 2))
+        }
+
+        await queue.flush(client: client, serverBaseURL: url, apiKey: "k")
+
+        XCTAssertEqual(client.receivedBatches.first, [Date(timeIntervalSince1970: 1)])
+        // The late arrival is sent by the same flush's next chunk, not lost.
+        XCTAssertEqual(client.receivedBatches.flatMap { $0 }.count, 2)
+        XCTAssertEqual(queue.pendingCount, 0)
+    }
+
+    func test_flush_capEvictionDuringFlight_doesNotRemoveUnsentEntries() async {
+        let queue = ActivityQueue(storageURL: tempURL, maxPendingCount: 3, persistDebounceInterval: 0)
+        for i in 0..<3 { queue.enqueue(Date(timeIntervalSince1970: TimeInterval(i))) }
+        let client = FakeEventsAPIClient()
+        // The post covers entries 0..2, but 0 and 1 are evicted meanwhile:
+        // only entry 2 may be removed; 3 and 4 must stay and be sent next.
+        var first = true
+        client.onPost = {
+            guard first else { return }
+            first = false
+            queue.enqueue(Date(timeIntervalSince1970: 3))
+            queue.enqueue(Date(timeIntervalSince1970: 4))
+        }
+
+        await queue.flush(client: client, serverBaseURL: url, apiKey: "k")
+
+        XCTAssertEqual(queue.pendingCount, 0)
+        XCTAssertEqual(client.receivedBatches.flatMap { $0 }.last, Date(timeIntervalSince1970: 4))
+    }
+
+    func test_flush_permanentRejection_dropsChunkAndContinues() async {
+        let queue = ActivityQueue(storageURL: tempURL, chunkSize: 2, persistDebounceInterval: 0)
+        for i in 0..<4 { queue.enqueue(Date(timeIntervalSince1970: TimeInterval(i))) }
+        let client = FakeEventsAPIClient()
+        var calls = 0
+        client.failure = .requestFailed(statusCode: 400)
+        client.onPost = { calls += 1; client.shouldFail = calls == 1 }
+
+        await queue.flush(client: client, serverBaseURL: url, apiKey: "k")
+
+        XCTAssertEqual(queue.pendingCount, 0, "poison chunk dropped, next chunk still delivered")
+        XCTAssertEqual(queue.droppedEventCount, 2)
+        XCTAssertEqual(client.receivedBatches.count, 2)
+    }
+
+    func test_flush_unauthorized_backsOffAndReportsError() async {
+        let queue = ActivityQueue(storageURL: tempURL)
+        queue.enqueue(Date())
+        let client = FakeEventsAPIClient()
+        client.shouldFail = true
+        client.failure = .unauthorized
+
+        await queue.flush(client: client, serverBaseURL: url, apiKey: "k")
+
+        XCTAssertEqual(queue.pendingCount, 1, "never drop data because of a bad key")
+        XCTAssertEqual(queue.lastError, "API key invalid or revoked")
+        XCTAssertEqual(queue.currentConsecutiveFailureCount, 1)
+    }
+
+    func test_flush_success_clearsLastError() async {
+        let clock = FakeClock()
+        let queue = ActivityQueue(storageURL: tempURL, baseBackoffInterval: 10, now: clock.now)
+        queue.enqueue(Date())
+        let client = FakeEventsAPIClient()
+        client.shouldFail = true
+        await queue.flush(client: client, serverBaseURL: url, apiKey: "k")
+        XCTAssertNotNil(queue.lastError)
+
+        client.shouldFail = false
+        clock.advance(by: 20)
+        await queue.flush(client: client, serverBaseURL: url, apiKey: "k")
+
+        XCTAssertNil(queue.lastError)
+    }
+
+    func test_enqueue_beyondCap_countsDroppedEvents() {
+        let queue = ActivityQueue(storageURL: tempURL, maxPendingCount: 2, persistDebounceInterval: 0)
+        for i in 0..<5 { queue.enqueue(Date(timeIntervalSince1970: TimeInterval(i))) }
+        XCTAssertEqual(queue.droppedEventCount, 3)
+    }
+
+    func test_load_corruptQueueFile_isQuarantinedNotOverwritten() throws {
+        try FileManager.default.createDirectory(at: tempURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{not json".utf8).write(to: tempURL)
+
+        let queue = ActivityQueue(storageURL: tempURL)
+        queue.enqueue(Date())
+        queue.persistNow()
+
+        XCTAssertEqual(queue.pendingCount, 1)
+        let quarantined = tempURL.appendingPathExtension("corrupt")
+        XCTAssertEqual(try String(contentsOf: quarantined, encoding: .utf8), "{not json")
+    }
+
+    // MARK: - Backward compatibility
+
+    func test_existingQueueFileWith3000Events_loadsAndIsFullyDeliveredInChunks() async throws {
+        // The shape the previous version wrote: {"pending": [...], "lastSuccessfulSyncAt": "..."}.
+        try FileManager.default.createDirectory(at: tempURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let stamps = (0..<3000).map { formatter.string(from: Date(timeIntervalSince1970: 1_700_000_000 + TimeInterval($0 * 30))) }
+        let json = try JSONSerialization.data(withJSONObject: ["pending": stamps, "lastSuccessfulSyncAt": "2026-01-01T00:00:00.000Z"])
+        try json.write(to: tempURL)
+
+        let queue = ActivityQueue(storageURL: tempURL)
+        XCTAssertEqual(queue.pendingCount, 3000)
+        XCTAssertNotNil(queue.lastSuccessfulSyncAt)
+
+        let client = FakeEventsAPIClient()
+        await queue.flush(client: client, serverBaseURL: url, apiKey: "k")
+
+        XCTAssertEqual(client.receivedBatches.map(\.count).reduce(0, +), 3000)
+        XCTAssertTrue(client.receivedBatches.allSatisfy { $0.count <= ActivityQueue.defaultChunkSize })
+        XCTAssertEqual(queue.pendingCount, 0)
     }
 }

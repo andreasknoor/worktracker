@@ -11,11 +11,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activityQueue: ActivityQueue!
     private let apiClient: EventsAPIClient = URLSessionEventsAPIClient()
 
+    /// Held for the life of the process; the OS releases the flock on exit.
+    private var instanceLockFileDescriptor: Int32 = -1
+
     private var idleMonitor: IdleMonitor?
     private var flushTimer: Timer?
     private var pendingCountForDisplay = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // A second instance would race the first on queue.json and show a
+        // duplicate menu-bar icon (the Windows tracker uses a named mutex).
+        guard acquireSingleInstanceLock() else {
+            NSApp.terminate(nil)
+            return
+        }
+
         NSApp.setActivationPolicy(.accessory) // menu-bar only, no Dock icon
         NSApp.mainMenu = Self.buildMainMenu()
 
@@ -28,6 +38,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         applyConfig(config)
+    }
+
+    private func acquireSingleInstanceLock() -> Bool {
+        let lockURL = configFileURL.deletingLastPathComponent().appendingPathComponent("instance.lock")
+        try? FileManager.default.createDirectory(
+            at: lockURL.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        let descriptor = open(lockURL.path, O_CREAT | O_RDWR, 0o600)
+        guard descriptor >= 0 else { return true } // can't lock; don't block tracking
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            close(descriptor)
+            return false
+        }
+        instanceLockFileDescriptor = descriptor
+        return true
     }
 
     /// Persistence of queued activity timestamps is debounced (see
@@ -47,7 +72,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard config.isConfigured else {
             statusBarController.update(
-                isActive: false, pendingCount: activityQueue.pendingCount, lastSuccessfulSyncAt: activityQueue.lastSuccessfulSyncAt
+                isActive: false, pendingCount: activityQueue.pendingCount,
+                lastSuccessfulSyncAt: activityQueue.lastSuccessfulSyncAt, lastError: activityQueue.lastError
             )
             return
         }
@@ -73,7 +99,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         flushTimer = timer
 
         statusBarController.update(
-            isActive: false, pendingCount: activityQueue.pendingCount, lastSuccessfulSyncAt: activityQueue.lastSuccessfulSyncAt
+            isActive: false, pendingCount: activityQueue.pendingCount,
+                lastSuccessfulSyncAt: activityQueue.lastSuccessfulSyncAt, lastError: activityQueue.lastError
         )
     }
 
@@ -111,7 +138,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func recordActivity() {
         activityQueue.enqueue(Date())
         statusBarController.update(
-            isActive: true, pendingCount: activityQueue.pendingCount, lastSuccessfulSyncAt: activityQueue.lastSuccessfulSyncAt
+            isActive: true, pendingCount: activityQueue.pendingCount,
+            lastSuccessfulSyncAt: activityQueue.lastSuccessfulSyncAt, lastError: activityQueue.lastError
         )
     }
 
@@ -125,7 +153,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await queue.flush(client: client, serverBaseURL: serverBaseURL, apiKey: apiKey)
             await MainActor.run {
                 self.statusBarController.update(
-                    isActive: false, pendingCount: queue.pendingCount, lastSuccessfulSyncAt: queue.lastSuccessfulSyncAt
+                    isActive: false, pendingCount: queue.pendingCount,
+                    lastSuccessfulSyncAt: queue.lastSuccessfulSyncAt, lastError: queue.lastError
                 )
             }
         }

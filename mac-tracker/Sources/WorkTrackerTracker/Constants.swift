@@ -13,4 +13,12 @@ enum TrackerConstants {
     /// than this doesn't meaningfully improve activity resolution, just add
     /// CPU/battery overhead.
     static let minPollIntervalSeconds: Int = 5
+
+    /// The longest poll interval a user can configure (matches the Windows
+    /// tracker's settings dialog).
+    static let maxPollIntervalSeconds: Int = 3600
+
+    /// Per-request network timeout. Shorter than a flush interval times a
+    /// few, so a hung connection can't stall syncing for long.
+    static let requestTimeoutSeconds: TimeInterval = 30
 }

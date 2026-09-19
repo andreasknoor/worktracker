@@ -637,6 +637,20 @@ describe("Event ingestion", () => {
     expect(response.status).toBe(400);
   });
 
+  it("treats a re-sent batch as idempotent (no duplicate events)", async () => {
+    const ts = new Date("2026-03-11T09:00:00.000Z").toISOString();
+    for (let i = 0; i < 2; i++) {
+      const response = await ctx.app.request("/api/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ timestamps: [ts, ts] }),
+      });
+      expect(response.status).toBe(201);
+    }
+    const stored = await ctx.events.getEventsInRangeForDevice(deviceId, 0, Date.now() + 1e12);
+    expect(stored).toEqual([Date.parse(ts)]);
+  });
+
   it("returns 400 instead of throwing on malformed JSON", async () => {
     const response = await ctx.app.request("/api/events", {
       method: "POST",
