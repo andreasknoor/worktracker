@@ -363,3 +363,31 @@ server outages, and made behaviorally identical:
 The on-disk `queue.json` format is unchanged (`{"pending": [...],
 "lastSuccessfulSyncAt": ...}`, plus the legacy bare array), so existing
 queues load as-is after an upgrade; covered by tests with a 3000-entry file.
+
+## Dashboard CPU spike + DB-outage crash risk (v1.21)
+
+Two related fixes, found while investigating "extreme Fluid Active CPU" usage:
+
+- **`public/js/app.js`'s `window.addEventListener("resize", ...)` was
+  undebounced** and re-ran the full `renderAll()` cascade (~10 independent
+  backend requests, each re-fetching raw events and recomputing sessions
+  from scratch — no caching or cross-request sharing) on every `resize`
+  event. On mobile Safari/Chrome, the address bar hiding/showing while
+  scrolling fires `resize` repeatedly (height-only changes), so a single
+  scroll gesture could trigger dozens of full re-renders. Now debounced
+  (300ms) and skipped entirely when only height changed (charts are
+  width-driven SVGs). The underlying redundancy — every render independently
+  re-fetching and recomputing overlapping date ranges — is not yet fixed;
+  see the `/api/stats/weeks` precedent above for the pattern to extend.
+- **`src/server/db/client.ts`'s `pg.Pool` had no `error` listener or
+  `connectionTimeoutMillis`.** node-postgres emits `"error"` on the pool
+  when an idle client's connection is dropped server-side — exactly what
+  happens when Neon suspends a project for exceeding its free-tier limits.
+  Unhandled, that's an uncaught exception that kills the warm process this
+  app's single-warm-instance design depends on (see "Single catch-all
+  Vercel Function" above), forcing a cold start (module load, TLS/JIT
+  warmup — real active-CPU cost) on the next request. A DB outage could
+  therefore *increase* CPU usage instead of just failing fast. Fixed with a
+  `pool.on("error", ...)` handler (logs, doesn't rethrow) and a 5s
+  `connectionTimeoutMillis` so an unreachable database fails a request
+  quickly instead of hanging.

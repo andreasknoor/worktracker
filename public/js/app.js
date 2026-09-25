@@ -2326,7 +2326,24 @@
       }
       renderAllWithAuthHandling();
 
-      window.addEventListener("resize", () => renderAll().catch(() => {}));
+      // Debounced, and ignores height-only changes: on mobile Safari/Chrome,
+      // the address bar hiding/showing while scrolling fires `resize`
+      // repeatedly (viewport height changes, width doesn't). Undebounced,
+      // each firing re-ran the full renderAll() cascade (~10 backend
+      // requests, each recomputing sessions from raw events) — a single
+      // scroll gesture could trigger dozens of these. Charts are
+      // width-driven (SVG viewBox), so a height-only resize needs no
+      // re-render anyway.
+      let resizeDebounceTimer;
+      let lastRenderedWidth = window.innerWidth;
+      window.addEventListener("resize", () => {
+        clearTimeout(resizeDebounceTimer);
+        resizeDebounceTimer = setTimeout(() => {
+          if (window.innerWidth === lastRenderedWidth) return;
+          lastRenderedWidth = window.innerWidth;
+          renderAll().catch(() => {});
+        }, 300);
+      });
 
       // Keeps the charts/tiles from going stale on a long-lived open tab —
       // renderAll() is otherwise only triggered by user interaction. Paired
