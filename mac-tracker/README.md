@@ -48,6 +48,13 @@ On first launch the menu-bar icon shows "Not configured". Open
 `https://your-project.vercel.app`) and the device API key issued once by
 `POST /api/devices` in the dashboard's Devices panel.
 
+The **Tracking mode** submenu switches this device between Auto (weekdays
+work, weekends leisure), Always work and Always leisure, effective from that
+moment. Time already tracked keeps its classification. A switch needs the
+server to be reachable; it isn't queued. The checkmark also follows changes
+made in the dashboard (the server reports the mode back with every event
+batch).
+
 Configuration and the pending-events queue are stored at
 `~/Library/Application Support/WorkTracker/`.
 
@@ -56,10 +63,11 @@ Configuration and the pending-events queue are stored at
 - `Config.swift` — `TrackerConfig` (server URL, API key, poll interval) and its JSON persistence.
 - `IdleMonitor.swift` — the pure "was the user active during this poll window" decision (`shouldRecordActivity`), plus the real `CGEventSource`-backed timer loop.
 - `ActivityQueue.swift` — persisted queue of not-yet-sent timestamps; survives quits and network blips.
-- `APIClient.swift` — `POST /api/events`, batched, Bearer-authenticated.
+- `APIClient.swift` — `POST /api/events`, batched, Bearer-authenticated; `GET`/`PUT /api/tracker/mode`.
+- `TrackingMode.swift` — the tracking-mode values and `TrackingModeController` (startup read, menu switch, server-reported updates).
 - `StatusBarController.swift` / `AppDelegate.swift` / `main.swift` — the menu-bar UI shell wiring the above together.
 
-`Config`, `IdleMonitor`'s decision function, and `ActivityQueue` are unit
+`Config`, `IdleMonitor`'s decision function, `ActivityQueue`, `TrackingModeController` and the API client's request/response handling are unit
 tested (`Tests/WorkTrackerTrackerTests/`) against fakes — no real network or
 system input state involved. The UI shell is intentionally thin and not
 unit-tested, same split as the server side (`packages/core` vs.

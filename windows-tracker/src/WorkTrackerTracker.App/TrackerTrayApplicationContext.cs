@@ -11,8 +11,9 @@ internal sealed class TrackerTrayApplicationContext : ApplicationContext
 {
     private readonly string _configFilePath = ConfigStore.DefaultConfigFilePath();
     private readonly string _queueFilePath;
-    private readonly IEventsApiClient _apiClient = new HttpEventsApiClient();
+    private readonly HttpEventsApiClient _apiClient = new();
     private readonly ActivityQueue _activityQueue;
+    private readonly TrackingModeController _trackingMode;
     private readonly TrayIconController _trayIcon;
 
     private TrackerConfig _config;
@@ -26,8 +27,15 @@ internal sealed class TrackerTrayApplicationContext : ApplicationContext
         _config = ConfigStore.Load(_configFilePath);
         _activityQueue = new ActivityQueue(_queueFilePath);
 
+        _trackingMode = new TrackingModeController(_apiClient);
+        // Every accepted event batch reports the device's current mode (e.g.
+        // after a change in the dashboard). Raised on a pool thread, so only
+        // the controller is touched here; the menu refreshes after each flush.
+        _apiClient.TrackingModeReported = (mode, startedAt) => _trackingMode.Report(mode, startedAt);
+
         _trayIcon = new TrayIconController(_config);
         _trayIcon.SettingsSaved += ApplyConfig;
+        _trayIcon.TrackingModeSelected += mode => _ = SelectTrackingModeAsync(mode);
 
         ApplyConfig(_config);
     }
@@ -44,6 +52,10 @@ internal sealed class TrackerTrayApplicationContext : ApplicationContext
         _flushTimer?.Stop();
         _flushTimer?.Dispose();
         _flushTimer = null;
+
+        // The server URL or API key may have changed, i.e. a different device.
+        _trackingMode.Reset();
+        UpdateTrackingModeMenu();
 
         if (!_config.IsConfigured)
         {
@@ -64,7 +76,28 @@ internal sealed class TrackerTrayApplicationContext : ApplicationContext
         _flushTimer.Start();
 
         UpdateTray(isActive: false);
+        _ = RefreshTrackingModeAsync();
     }
+
+    // Awaited on the UI thread: the continuations resume there, so the menu
+    // is only ever touched from it (the controller's own awaits don't
+    // capture the context, but this method's do).
+    private async Task RefreshTrackingModeAsync()
+    {
+        await _trackingMode.RefreshAsync(_config.ServerBaseUrl, _config.ApiKey);
+        UpdateTrackingModeMenu();
+    }
+
+    private async Task SelectTrackingModeAsync(TrackingMode mode)
+    {
+        if (!_config.IsConfigured) return;
+        _trayIcon.UpdateTrackingMode(_trackingMode.CurrentMode, isSwitching: true, error: null);
+        await _trackingMode.SelectAsync(mode, _config.ServerBaseUrl, _config.ApiKey);
+        UpdateTrackingModeMenu();
+    }
+
+    private void UpdateTrackingModeMenu() =>
+        _trayIcon.UpdateTrackingMode(_trackingMode.CurrentMode, _trackingMode.IsSwitching, _trackingMode.LastError);
 
     private void RecordActivity()
     {
@@ -87,5 +120,6 @@ internal sealed class TrackerTrayApplicationContext : ApplicationContext
     {
         await _activityQueue.FlushAsync(_apiClient, _config.ServerBaseUrl, _config.ApiKey).ConfigureAwait(true);
         UpdateTray(isActive: false);
+        UpdateTrackingModeMenu();
     }
 }

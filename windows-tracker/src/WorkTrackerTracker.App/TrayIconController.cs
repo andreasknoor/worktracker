@@ -6,9 +6,10 @@ namespace WorkTrackerTracker.App;
 
 /// <summary>
 /// Owns the tray icon and its context menu: a live status line, a pending
-/// (not-yet-synced) event count, a settings dialog, and Exit. All actual
-/// tracking logic lives in IdleMonitor / ActivityQueue; this is just the UI
-/// shell around them — the Windows analogue of the Mac tracker's
+/// (not-yet-synced) event count, the work/leisure tracking-mode switch, a
+/// settings dialog, and Exit. All actual tracking logic lives in IdleMonitor
+/// / ActivityQueue / TrackingModeController; this is just the UI shell
+/// around them — the Windows analogue of the Mac tracker's
 /// StatusBarController.swift.
 /// </summary>
 internal sealed class TrayIconController : IDisposable
@@ -19,11 +20,15 @@ internal sealed class TrayIconController : IDisposable
     private readonly ToolStripMenuItem _pendingItem;
     private readonly ToolStripMenuItem _lastSyncItem;
     private readonly ToolStripMenuItem _errorItem;
+    private readonly ToolStripMenuItem _trackingModeItem;
+    private readonly ToolStripMenuItem _trackingModeErrorItem;
+    private readonly Dictionary<TrackingMode, ToolStripMenuItem> _trackingModeItems = new();
     private SettingsForm? _settingsForm;
 
     private TrackerConfig _currentConfig;
 
     public event Action<TrackerConfig>? SettingsSaved;
+    public event Action<TrackingMode>? TrackingModeSelected;
 
     public TrayIconController(TrackerConfig initialConfig)
     {
@@ -33,6 +38,18 @@ internal sealed class TrayIconController : IDisposable
         _pendingItem = new ToolStripMenuItem { Enabled = false };
         _lastSyncItem = new ToolStripMenuItem { Enabled = false };
         _errorItem = new ToolStripMenuItem { Enabled = false, Visible = false };
+
+        _trackingModeItem = new ToolStripMenuItem("Tracking mode");
+        foreach (var mode in TrackingModes.All)
+        {
+            var item = new ToolStripMenuItem(TrackingModes.MenuTitle(mode));
+            item.Click += (_, _) => TrackingModeSelected?.Invoke(mode);
+            _trackingModeItem.DropDownItems.Add(item);
+            _trackingModeItems[mode] = item;
+        }
+        _trackingModeItem.DropDownItems.Add(new ToolStripSeparator());
+        _trackingModeItem.DropDownItems.Add(new ToolStripMenuItem("Applies from now on") { Enabled = false });
+        _trackingModeErrorItem = new ToolStripMenuItem { Enabled = false, Visible = false };
 
         var settingsItem = new ToolStripMenuItem("Settings…");
         settingsItem.Click += (_, _) => OpenSettings();
@@ -45,6 +62,9 @@ internal sealed class TrayIconController : IDisposable
         menu.Items.Add(_pendingItem);
         menu.Items.Add(_lastSyncItem);
         menu.Items.Add(_errorItem);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(_trackingModeItem);
+        menu.Items.Add(_trackingModeErrorItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(settingsItem);
         menu.Items.Add(new ToolStripSeparator());
@@ -60,6 +80,24 @@ internal sealed class TrayIconController : IDisposable
         };
 
         Update(isActive: false, pendingCount: 0);
+        UpdateTrackingMode(null, isSwitching: false, error: null);
+    }
+
+    /// <summary>
+    /// Checks the current mode (none while unknown) and disables switching
+    /// while unconfigured or while a switch is in flight. Call on the UI thread.
+    /// </summary>
+    public void UpdateTrackingMode(TrackingMode? mode, bool isSwitching, string? error)
+    {
+        var label = mode is { } known ? $"Tracking mode: {TrackingModes.MenuTitle(known)}" : "Tracking mode";
+        _trackingModeItem.Text = isSwitching ? $"{label} (switching…)" : label;
+        foreach (var (itemMode, item) in _trackingModeItems)
+        {
+            item.Checked = itemMode == mode;
+            item.Enabled = _currentConfig.IsConfigured && !isSwitching;
+        }
+        _trackingModeErrorItem.Text = error is null ? string.Empty : $"⚠ Couldn't switch mode: {error}";
+        _trackingModeErrorItem.Visible = error is not null;
     }
 
     // Drawn at runtime rather than shipped as an .ico resource, so the tray

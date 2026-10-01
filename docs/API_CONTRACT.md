@@ -163,7 +163,31 @@ or a small batch (recommended, so a tracker can flush a short local queue after 
 - Ingestion is idempotent: `activity_events` has a unique index on `(device_id, timestamp_utc)` and inserts use `ON CONFLICT DO NOTHING`, so a tracker re-sending a batch after a timeout or partial failure creates no duplicates. **The migration `scripts/migrations/2026-09-19-unique-activity-events.mjs` must be run before deploying code that relies on this**, otherwise `ON CONFLICT` fails with a 500.
 - Trackers send at most 1000 timestamps per request (chunked), retry 5xx/network/401 with exponential backoff, and drop a chunk only on 400/413/422.
 - Server resolves the key to a `device_id`, inserts one row per timestamp into `activity_events`, and updates that device's `last_seen_at`.
-- `200`/`201` with an empty or minimal ack body — trackers don't need a rich response.
+- `201` with `{ "trackingMode": "auto" | "alwaysWork" | "alwaysLeisure" }`: the device's current tracking mode, so a tracker learns about a change made in the dashboard within one flush interval without polling (the device row is already loaded for authentication — no extra query). Servers before v1.24 answered with an empty body; trackers accept both.
+
+## Tracker self-service (device API key)
+
+Trackers can read and switch their **own** tracking mode — nothing else, and
+no other device (there's no device id in these routes). Authenticated like
+`/api/events` (`Authorization: Bearer <device-api-key>`; `401` if missing,
+invalid or revoked); a dashboard session cookie is **not** accepted. The
+`/api/tracker` prefix deliberately lies outside every dashboard-gated prefix.
+
+### `GET /api/tracker/mode`
+```json
+{ "trackingMode": "alwaysLeisure", "effectiveFrom": "2026-10-01T14:30:00.000Z" }
+```
+`effectiveFrom` is when the current mode took effect (null only for a device
+with no history row).
+
+### `PUT /api/tracker/mode`
+Request: `{ "trackingMode": "auto" | "alwaysWork" | "alwaysLeisure" }`, else
+`400`. Same effect as the dashboard's `PATCH /api/devices/{id}` with
+`trackingMode`: the change takes effect from the time it's received, and
+re-sending the current mode is a no-op that keeps the original
+`effectiveFrom`. Returns the same shape as `GET`. Trackers don't queue
+switches made while offline. They fail visibly instead, since a switch only
+means something at the moment it happens.
 
 ## Device management (new — dashboard admin UI, not yet in the original prototype)
 

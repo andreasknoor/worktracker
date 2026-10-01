@@ -33,7 +33,7 @@ On the Windows machine:
 
 ```powershell
 git pull
-dotnet test test\WorkTrackerTracker.Core.Tests\WorkTrackerTracker.Core.Tests.csproj   # should still be 21/21
+dotnet test test\WorkTrackerTracker.Core.Tests\WorkTrackerTracker.Core.Tests.csproj   # 55 tests as of v1.24
 dotnet run --project src\WorkTrackerTracker.App\WorkTrackerTracker.App.csproj
 ```
 
@@ -51,6 +51,11 @@ Things to specifically check that couldn't be verified on the Mac:
   app relaunches correctly at login.
 - A real end-to-end run: does an activity event actually reach the server
   and show up on the dashboard?
+- The **Tracking mode** submenu (v1.24): the current mode is checked shortly
+  after start, switching updates the checkmark and the dashboard's device
+  list, a switch while offline shows "Couldn't switch mode" and keeps the
+  previous checkmark, and a change made in the dashboard shows up after the
+  next flush.
 
 ## Run & test
 
@@ -90,7 +95,8 @@ Point the "Start with Windows" Registry value (and any shortcut) at
 
 - `TrackerConfig.cs` / `ConfigStore` — config (server URL, API key, poll interval) and its JSON persistence.
 - `IdlePolicy.cs` — the pure "was the user active during this poll window" decision, plus the resume-confirmation-window widening rule from `docs/SESSION_LOGIC_SPEC.md`.
-- `EventsApiClient.cs` — `POST /api/events`, batched, Bearer-authenticated.
+- `EventsApiClient.cs` — `POST /api/events`, batched, Bearer-authenticated; `GET`/`PUT /api/tracker/mode`.
+- `TrackingMode.cs` — the tracking-mode values and `TrackingModeController` (startup read, menu switch, server-reported updates).
 - `ActivityQueue.cs` — persisted queue of not-yet-sent timestamps; survives quits and network blips.
 - `NativeIdleTime.cs` / `IdleMonitor.cs` (App) — the real `GetLastInputInfo`-backed timer loop.
 - `TrayIconController.cs` / `SettingsForm.cs` / `TrackerTrayApplicationContext.cs` (App) — the tray UI shell wiring the above together.

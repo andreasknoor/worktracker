@@ -164,6 +164,14 @@ tray shell) has never been run outside Windows — see
   Tests that classify must set the mode *before* their events' timestamps —
   route tests do this via the injectable clock (`AppDependencies.now`,
   `ctx.clock.nowMs`).
+- **Trackers authenticate with their device API key, not the dashboard
+  session.** `requireDeviceKey` guards `/api/events` and `/api/tracker/*`
+  (registered on both `/api/tracker` and `/api/tracker/*`). The tracker-facing
+  routes must stay outside the dashboard-gated prefixes: a path like
+  `/api/devices/me/...` would be caught by the dashboard gate. Trackers can
+  only read and switch their own tracking mode (`GET`/`PUT
+  /api/tracker/mode`); `POST /api/events` answers with the current mode,
+  which is how the menus follow dashboard changes without polling.
 - **Two-step device deletion.** `DELETE /api/devices/:id` soft-revokes
   (unchanged); `DELETE /api/devices/:id?permanent=true` hard-deletes the row,
   but only once already revoked (a safety gate, not a data-integrity

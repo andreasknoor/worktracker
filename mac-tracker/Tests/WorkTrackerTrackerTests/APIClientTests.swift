@@ -1,0 +1,99 @@
+import XCTest
+@testable import WorkTrackerTracker
+
+/// Serves canned responses to `URLSession` requests, recording each request.
+private final class StubURLProtocol: URLProtocol {
+    static var responses: [(status: Int, body: String)] = []
+    static var requests: [URLRequest] = []
+    static var bodies: [Data] = []
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.requests.append(request)
+        if let stream = request.httpBodyStream {
+            stream.open()
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let read = stream.read(&buffer, maxLength: buffer.count)
+                if read <= 0 { break }
+                data.append(buffer, count: read)
+            }
+            stream.close()
+            Self.bodies.append(data)
+        } else {
+            Self.bodies.append(request.httpBody ?? Data())
+        }
+        let (status, body) = Self.responses.isEmpty ? (500, "") : Self.responses.removeFirst()
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+final class APIClientTests: XCTestCase {
+    private var client: URLSessionEventsAPIClient!
+
+    override func setUp() {
+        super.setUp()
+        StubURLProtocol.responses = []
+        StubURLProtocol.requests = []
+        StubURLProtocol.bodies = []
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        client = URLSessionEventsAPIClient(session: URLSession(configuration: configuration))
+    }
+
+    func test_postEvents_reportsTheModeFromTheResponse() async throws {
+        StubURLProtocol.responses = [(201, #"{"trackingMode":"alwaysLeisure"}"#)]
+        var reported: TrackingMode?
+        client.onTrackingModeReported = { mode, _ in reported = mode }
+
+        try await client.postEvents([Date()], serverBaseURL: "https://example.test", apiKey: "k")
+        XCTAssertEqual(reported, .alwaysLeisure)
+    }
+
+    func test_postEvents_acceptsAnOlderServersEmptyBody() async throws {
+        StubURLProtocol.responses = [(201, "")]
+        var reported: TrackingMode?
+        client.onTrackingModeReported = { mode, _ in reported = mode }
+
+        try await client.postEvents([Date()], serverBaseURL: "https://example.test", apiKey: "k")
+        XCTAssertNil(reported)
+    }
+
+    func test_setTrackingMode_putsTheModeWithTheDeviceKey() async throws {
+        StubURLProtocol.responses = [(200, #"{"trackingMode":"alwaysWork","effectiveFrom":"2026-10-01T10:00:00.000Z"}"#)]
+
+        let confirmed = try await client.setTrackingMode(.alwaysWork, serverBaseURL: "https://example.test", apiKey: "secret")
+
+        XCTAssertEqual(confirmed, .alwaysWork)
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.httpMethod, "PUT")
+        XCTAssertEqual(request.url?.absoluteString, "https://example.test/api/tracker/mode")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+        let body = try JSONSerialization.jsonObject(with: StubURLProtocol.bodies[0]) as? [String: String]
+        XCTAssertEqual(body, ["trackingMode": "alwaysWork"])
+    }
+
+    func test_getTrackingMode_mapsStatusCodesToErrors() async {
+        StubURLProtocol.responses = [(401, ""), (404, "")]
+        do {
+            _ = try await client.getTrackingMode(serverBaseURL: "https://example.test", apiKey: "k")
+            XCTFail("expected unauthorized")
+        } catch {
+            XCTAssertEqual(TrackingModeController.describe(error), "API key invalid or revoked")
+        }
+        do {
+            _ = try await client.getTrackingMode(serverBaseURL: "https://example.test", apiKey: "k")
+            XCTFail("expected 404")
+        } catch {
+            XCTAssertEqual(TrackingModeController.describe(error), "Server doesn't support switching yet (update it)")
+        }
+    }
+}

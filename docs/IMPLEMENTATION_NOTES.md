@@ -451,3 +451,32 @@ before deploying (the v1.22 code ignores the new table, so this is safe), deploy
 run the migration once more to reconcile any mode change made through the
 old server in between, then export and run
 `scripts/golden-numbers.ts check`. It must report no mismatches.
+
+## Switching the tracking mode from the trackers (v1.24)
+
+Phase 2 of `docs/PLAN_TRACKER_MODE_TOGGLE.md`:
+
+- **Server**: the device-key check of `POST /api/events` became the
+  `requireDeviceKey` middleware, also guarding the new `GET`/`PUT
+  /api/tracker/mode`. The earlier plan's `/api/devices/me/tracking-mode`
+  would have been caught by the dashboard gate on `/api/devices/*`, so a
+  tracker would always have gotten `401`. `POST /api/events` now answers
+  `201 { trackingMode }`. That costs no extra query (the device row is
+  already loaded for auth) and is how trackers follow dashboard changes
+  without polling.
+- **Trackers** (Mac `TrackingMode.swift`, Windows `Core/TrackingMode.cs`, kept
+  behaviorally identical): a "Tracking mode" submenu with a checkmark on the
+  current mode. `TrackingModeController` reads the mode once at startup, PUTs
+  on selection, and accepts the mode reported with each event batch, except
+  while a switch is in flight or when the reporting request started before
+  the last completed switch (it would carry the pre-switch mode). A failed
+  switch shows an error line and is **not** queued or retried. Opening the
+  menu triggers no request.
+- Mac: `swift test` (52 tests) covers the controller and the URLSession
+  client via a `URLProtocol` stub. Windows: `Core` tests (55) cover the
+  controller and the `HttpClient` path via a stub `HttpMessageHandler`. The
+  menus themselves (`StatusBarController.swift`, `TrayIconController.cs`)
+  remain manually verified only; the Windows one needs a check on a real
+  Windows machine (see `windows-tracker/README.md`).
+- `Core` tests target net8.0; on a machine with only a newer .NET runtime,
+  run them with `DOTNET_ROLL_FORWARD=Major`.

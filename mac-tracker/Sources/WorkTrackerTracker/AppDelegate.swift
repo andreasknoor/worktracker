@@ -9,7 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var config: TrackerConfig = .empty
     private var statusBarController: StatusBarController!
     private var activityQueue: ActivityQueue!
-    private let apiClient: EventsAPIClient = URLSessionEventsAPIClient()
+    private let apiClient = URLSessionEventsAPIClient()
+    private lazy var trackingMode = TrackingModeController(client: apiClient)
 
     /// Held for the life of the process; the OS releases the flock on exit.
     private var instanceLockFileDescriptor: Int32 = -1
@@ -35,6 +36,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusBarController = StatusBarController(initialConfig: config)
         statusBarController.onSettingsSaved = { [weak self] newConfig in
             self?.applyConfig(newConfig)
+        }
+        statusBarController.onTrackingModeSelected = { [weak self] mode in
+            self?.selectTrackingMode(mode)
+        }
+        // Every accepted event batch reports the device's current mode (e.g.
+        // after a change in the dashboard). Only the controller is touched
+        // here, off the main thread; the menu refreshes after each flush.
+        let controller = trackingMode
+        apiClient.onTrackingModeReported = { mode, startedAt in
+            controller.report(mode, requestStartedAt: startedAt)
         }
 
         applyConfig(config)
@@ -70,6 +81,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         idleMonitor?.stop()
         flushTimer?.invalidate()
 
+        // The server URL or API key may have changed, i.e. a different device.
+        trackingMode.reset()
+        refreshTrackingModeMenu()
+
         guard config.isConfigured else {
             statusBarController.update(
                 isActive: false, pendingCount: activityQueue.pendingCount,
@@ -97,6 +112,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         RunLoop.main.add(timer, forMode: .common)
         flushTimer = timer
+
+        let controller = trackingMode
+        let serverBaseURL = config.serverBaseURL
+        let apiKey = config.apiKey
+        Task {
+            await controller.refresh(serverBaseURL: serverBaseURL, apiKey: apiKey)
+            await MainActor.run { self.refreshTrackingModeMenu() }
+        }
 
         statusBarController.update(
             isActive: false, pendingCount: activityQueue.pendingCount,
@@ -156,7 +179,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     isActive: false, pendingCount: queue.pendingCount,
                     lastSuccessfulSyncAt: queue.lastSuccessfulSyncAt, lastError: queue.lastError
                 )
+                self.refreshTrackingModeMenu()
             }
         }
+    }
+
+    private func selectTrackingMode(_ mode: TrackingMode) {
+        guard config.isConfigured else { return }
+        let controller = trackingMode
+        let serverBaseURL = config.serverBaseURL
+        let apiKey = config.apiKey
+
+        // Show "switching…" right away; the controller itself flips its
+        // state only once its task starts running.
+        statusBarController.updateTrackingMode(controller.currentMode, isSwitching: true, error: nil)
+        Task {
+            await controller.select(mode, serverBaseURL: serverBaseURL, apiKey: apiKey)
+            await MainActor.run { self.refreshTrackingModeMenu() }
+        }
+    }
+
+    private func refreshTrackingModeMenu() {
+        statusBarController.updateTrackingMode(
+            trackingMode.currentMode, isSwitching: trackingMode.isSwitching, error: trackingMode.lastError
+        )
     }
 }

@@ -30,12 +30,19 @@ import {
   verifySessionToken,
 } from "./auth.js";
 import { APP_VERSION, appTimeZone, isProduction } from "./config.js";
-import type { ActivityEventsRepository, DevicesRepository, SettingsRepository } from "./repositories/types.js";
+import type { ActivityEventsRepository, Device, DevicesRepository, SettingsRepository } from "./repositories/types.js";
 import {
   getAttributedSessionsInRange,
   getClassifiedSessionsInRange,
   getMergedSessionsInRange,
 } from "./services/sessionsService.js";
+
+declare module "hono" {
+  interface ContextVariableMap {
+    /** The tracker's own device, set by `requireDeviceKey` on tracker-facing routes. */
+    device: Device;
+  }
+}
 
 const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -284,6 +291,28 @@ export function createApp(deps: AppDependencies): Hono {
   app.use("/api/settings/*", requireDashboardSession);
   app.use("/api/devices", requireDashboardSession);
   app.use("/api/devices/*", requireDashboardSession);
+
+  // Tracker-facing routes authenticate with the device's own API key
+  // instead of the dashboard session. `/api/tracker/*` deliberately lives
+  // outside every dashboard-gated prefix (a `/api/devices/me/...` path
+  // would be caught by the gate above), and is registered in both forms
+  // for the same reason as the dashboard routes.
+  const requireDeviceKey = async (c: Context, next: Next) => {
+    const authHeader = c.req.header("Authorization");
+    const rawKey = authHeader?.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : undefined;
+    if (!rawKey) return c.json({ error: "Missing API key" }, 401);
+
+    const device = await deps.devices.getByApiKeyHash(hashApiKey(rawKey));
+    if (!device || device.revokedAt !== null) {
+      return c.json({ error: "Invalid or revoked API key" }, 401);
+    }
+    c.set("device", device);
+    await next();
+  };
+
+  app.use("/api/events", requireDeviceKey);
+  app.use("/api/tracker", requireDeviceKey);
+  app.use("/api/tracker/*", requireDeviceKey);
 
   // ---------- Stats ----------
 
@@ -777,14 +806,7 @@ export function createApp(deps: AppDependencies): Hono {
   // ---------- Event ingestion (trackers) ----------
 
   app.post("/api/events", async (c) => {
-    const authHeader = c.req.header("Authorization");
-    const rawKey = authHeader?.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : undefined;
-    if (!rawKey) return c.json({ error: "Missing API key" }, 401);
-
-    const device = await deps.devices.getByApiKeyHash(hashApiKey(rawKey));
-    if (!device || device.revokedAt !== null) {
-      return c.json({ error: "Invalid or revoked API key" }, 401);
-    }
+    const device = c.get("device");
 
     const body = await c.req
       .json<{ timestamp?: string; timestamps?: string[] }>()
@@ -804,7 +826,39 @@ export function createApp(deps: AppDependencies): Hono {
     await deps.events.insertEvents(device.id, parsed);
     await deps.devices.touchLastSeen(device.id, now());
 
-    return c.body(null, 201);
+    // The device's current tracking mode rides along on every accepted
+    // batch, so trackers learn about a change made in the dashboard within
+    // one flush interval without polling for it — the device row is already
+    // loaded for authentication, so this costs no extra query.
+    return c.json({ trackingMode: device.trackingMode }, 201);
+  });
+
+  // ---------- Tracker self-service (device API key) ----------
+  //
+  // A tracker may read and switch its *own* tracking mode — nothing else, and
+  // no other device (there is no device id parameter at all). A switch
+  // takes effect from the time it's received, exactly like the dashboard's
+  // PATCH /api/devices/:id; trackers don't queue switches while offline.
+
+  const trackingModeResponse = async (c: Context, device: Device) => {
+    const current = await deps.devices.getCurrentTrackingModeChange(device.id);
+    return c.json({
+      trackingMode: device.trackingMode,
+      effectiveFrom: current ? new Date(current.effectiveFrom).toISOString() : null,
+    });
+  };
+
+  app.get("/api/tracker/mode", async (c) => trackingModeResponse(c, c.get("device")));
+
+  app.put("/api/tracker/mode", async (c) => {
+    const body = await c.req.json<{ trackingMode?: TrackingMode }>().catch(() => ({ trackingMode: undefined }));
+    if (body.trackingMode === undefined || !TRACKING_MODE_VALUES.includes(body.trackingMode)) {
+      return c.json({ error: `trackingMode must be one of: ${TRACKING_MODE_VALUES.join(", ")}` }, 400);
+    }
+
+    const updated = await deps.devices.setTrackingMode(c.get("device").id, body.trackingMode, now());
+    if (!updated) return c.json({ error: "Invalid or revoked API key" }, 401); // deleted meanwhile
+    return trackingModeResponse(c, updated);
   });
 
   // Normalizes any handler failure we didn't already catch (e.g. a
