@@ -1,6 +1,10 @@
 # Plan: Timestamped Work/Leisure Classification
 
 Status: proposed, not implemented. Written 2026-09-11, updated 2026-09-13.
+See `docs/PLAN_TRACKER_MODE_TOGGLE.md` (2026-10-01) for the effort/risk
+assessment and phased rollout. It adopts this plan's design, but replaces the
+Phase 2 endpoint path (`/api/devices/me/...` would be blocked by the
+dashboard auth middleware).
 
 ## Background
 
