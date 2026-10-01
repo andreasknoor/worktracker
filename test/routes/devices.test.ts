@@ -18,13 +18,21 @@ interface TestContext {
   devices: InMemoryDevicesRepository;
   events: InMemoryActivityEventsRepository;
   cookie: string;
+  /**
+   * The server clock: `nowMs: null` follows real time; set it to place
+   * device creation and tracking-mode changes in time — they take effect
+   * when received, so classification tests must happen-before their events.
+   */
+  clock: { nowMs: number | null };
 }
 
 async function setUp(): Promise<TestContext> {
-  const devices = new InMemoryDevicesRepository();
+  const clock: { nowMs: number | null } = { nowMs: null };
+  const now = () => clock.nowMs ?? Date.now();
+  const devices = new InMemoryDevicesRepository(now);
   const events = new InMemoryActivityEventsRepository();
   const settings = new InMemorySettingsRepository();
-  const app = createApp({ devices, events, settings });
+  const app = createApp({ devices, events, settings, now });
 
   const loginResponse = await app.request("/api/auth/login", {
     method: "POST",
@@ -33,7 +41,7 @@ async function setUp(): Promise<TestContext> {
   });
   const cookie = loginResponse.headers.get("set-cookie")!.split(";")[0]!;
 
-  return { app, devices, events, cookie };
+  return { app, devices, events, cookie, clock };
 }
 
 function authed(ctx: TestContext, path: string, init: RequestInit = {}) {
@@ -837,6 +845,9 @@ describe("Work/leisure classification (?workType=work|leisure|all)", () => {
 
   async function setUpTwoClassifiedDevices() {
     const ctx = await setUp();
+    // Both devices are created and switched before any of their activity —
+    // a mode only applies from the moment it was set.
+    ctx.clock.nowMs = Date.UTC(2026, 2, 1);
 
     const companyPc = await (
       await authed(ctx, "/api/devices", {
@@ -1145,3 +1156,155 @@ function mondayOfToday(): string {
   monday.setUTCDate(now.getUTCDate() + diff);
   return monday.toISOString().slice(0, 10);
 }
+
+describe("Tracking-mode history (classification by the mode in effect at the time)", () => {
+  // 2026-03-09 is a Monday, 2026-03-14 a Saturday.
+  const monday = Date.UTC(2026, 2, 9);
+  const saturday = Date.UTC(2026, 2, 14);
+  const HOUR = 60 * MINUTE;
+
+  async function createDevice(ctx: TestContext, name: string) {
+    return (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, platform: "mac" }),
+      })
+    ).json() as Promise<{ id: string; apiKey: string }>;
+  }
+
+  async function setMode(ctx: TestContext, id: string, trackingMode: string, atMs: number) {
+    ctx.clock.nowMs = atMs;
+    const response = await authed(ctx, `/api/devices/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trackingMode }),
+    });
+    expect(response.status).toBe(200);
+    return response.json();
+  }
+
+  /** Activity every 10 minutes in [fromMs, toMs]. */
+  async function activity(ctx: TestContext, apiKey: string, fromMs: number, toMs: number) {
+    const timestamps: string[] = [];
+    for (let t = fromMs; t <= toMs; t += 10 * MINUTE) timestamps.push(new Date(t).toISOString());
+    const response = await ctx.app.request("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ timestamps }),
+    });
+    expect(response.status).toBe(201);
+  }
+
+  async function hoursOn(ctx: TestContext, date: string, workType: string, extra = "") {
+    const week = await (await authed(ctx, `/api/stats/week?start=2026-03-09&workType=${workType}${extra}`)).json();
+    return week.days.find((d: { date: string }) => d.date === date).hours as number;
+  }
+
+  let ctx: TestContext;
+  beforeEach(async () => {
+    ctx = await setUp();
+    ctx.clock.nowMs = Date.UTC(2026, 2, 1);
+  });
+
+  it("splits one device's day into work and leisure at a mid-day switch", async () => {
+    const laptop = await createDevice(ctx, "Laptop");
+    await setMode(ctx, laptop.id, "alwaysLeisure", monday + 12 * HOUR);
+    await activity(ctx, laptop.apiKey, monday + 10 * HOUR, monday + 14 * HOUR);
+
+    expect(await hoursOn(ctx, "2026-03-09", "work")).toBeCloseTo(2, 5);
+    expect(await hoursOn(ctx, "2026-03-09", "leisure")).toBeCloseTo(2, 5);
+    expect(await hoursOn(ctx, "2026-03-09", "all")).toBeCloseTo(4, 5);
+  });
+
+  it("never reclassifies time tracked before a later switch", async () => {
+    const pc = await createDevice(ctx, "Company PC");
+    await setMode(ctx, pc.id, "alwaysWork", Date.UTC(2026, 2, 2));
+    await activity(ctx, pc.apiKey, saturday + 10 * HOUR, saturday + 11 * HOUR);
+    expect(await hoursOn(ctx, "2026-03-14", "work")).toBeCloseTo(1, 5);
+
+    await setMode(ctx, pc.id, "alwaysLeisure", Date.UTC(2026, 2, 20));
+
+    expect(await hoursOn(ctx, "2026-03-14", "work")).toBeCloseTo(1, 5);
+    expect(await hoursOn(ctx, "2026-03-14", "leisure")).toBe(0);
+  });
+
+  it("applies a switch made before the queried range to the whole range", async () => {
+    const laptop = await createDevice(ctx, "Laptop");
+    await setMode(ctx, laptop.id, "alwaysLeisure", Date.UTC(2026, 2, 2));
+    await activity(ctx, laptop.apiKey, monday + 9 * HOUR, monday + 10 * HOUR);
+
+    expect(await hoursOn(ctx, "2026-03-09", "leisure")).toBeCloseTo(1, 5);
+    expect(await hoursOn(ctx, "2026-03-09", "work")).toBe(0);
+  });
+
+  it("classifies activity predating the device's history with its oldest mode, not its current one", async () => {
+    // Created on Mar 1 (auto), switched to alwaysWork on Mar 20; Saturday Mar 14 activity is auto → leisure.
+    const laptop = await createDevice(ctx, "Laptop");
+    await setMode(ctx, laptop.id, "alwaysWork", Date.UTC(2026, 2, 20));
+    await activity(ctx, laptop.apiKey, saturday + 9 * HOUR, saturday + 10 * HOUR);
+
+    expect(await hoursOn(ctx, "2026-03-14", "leisure")).toBeCloseTo(1, 5);
+    expect(await hoursOn(ctx, "2026-03-14", "work")).toBe(0);
+  });
+
+  it("records a history row only when the mode actually changes", async () => {
+    const laptop = await createDevice(ctx, "Laptop");
+    await setMode(ctx, laptop.id, "alwaysWork", Date.UTC(2026, 2, 2));
+    await setMode(ctx, laptop.id, "alwaysWork", Date.UTC(2026, 2, 3));
+    await setMode(ctx, laptop.id, "auto", Date.UTC(2026, 2, 4));
+
+    const [device] = await ctx.devices.listWithTrackingModeHistory(Date.UTC(2026, 2, 1), Date.UTC(2026, 3, 1));
+    expect(device!.modeHistory).toEqual([
+      { effectiveFrom: Date.UTC(2026, 2, 1), mode: "auto" },
+      { effectiveFrom: Date.UTC(2026, 2, 2), mode: "alwaysWork" },
+      { effectiveFrom: Date.UTC(2026, 2, 4), mode: "auto" },
+    ]);
+  });
+
+  it("applies idle/poll settings and tracking mode from one PATCH", async () => {
+    const laptop = await createDevice(ctx, "Laptop");
+    const response = await authed(ctx, `/api/devices/${laptop.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idleThresholdMinutes: 12, trackingMode: "alwaysLeisure" }),
+    });
+    const patched = await response.json();
+    expect(patched.idleThresholdMinutes).toBe(12);
+    expect(patched.trackingMode).toBe("alwaysLeisure");
+  });
+
+  it("returns 404 when switching an unknown device", async () => {
+    const response = await authed(ctx, "/api/devices/00000000-0000-4000-8000-000000000000", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trackingMode: "alwaysWork" }),
+    });
+    expect(response.status).toBe(404);
+  });
+
+  it("uses the history in the per-device view and the week timeline too", async () => {
+    const laptop = await createDevice(ctx, "Laptop");
+    await setMode(ctx, laptop.id, "alwaysLeisure", monday + 12 * HOUR);
+    await activity(ctx, laptop.apiKey, monday + 10 * HOUR, monday + 14 * HOUR);
+
+    expect(await hoursOn(ctx, "2026-03-09", "work", `&deviceId=${laptop.id}`)).toBeCloseTo(2, 5);
+
+    const timeline = await (await authed(ctx, "/api/stats/week-timeline?start=2026-03-09&workType=leisure")).json();
+    const segments = timeline.days.find((d: { date: string }) => d.date === "2026-03-09").segments;
+    expect(segments).toEqual([{ startMinutes: 12 * 60, endMinutes: 14 * 60, deviceIds: [laptop.id] }]);
+  });
+
+  it("drops a permanently deleted device's history: its orphaned events fall back to auto", async () => {
+    const pc = await createDevice(ctx, "Company PC");
+    await setMode(ctx, pc.id, "alwaysWork", Date.UTC(2026, 2, 2));
+    await activity(ctx, pc.apiKey, saturday + 10 * HOUR, saturday + 11 * HOUR);
+    expect(await hoursOn(ctx, "2026-03-14", "work")).toBeCloseTo(1, 5);
+
+    await authed(ctx, `/api/devices/${pc.id}`, { method: "DELETE" });
+    await authed(ctx, `/api/devices/${pc.id}?permanent=true`, { method: "DELETE" });
+
+    expect(await hoursOn(ctx, "2026-03-14", "work")).toBe(0);
+    expect(await hoursOn(ctx, "2026-03-14", "leisure")).toBeCloseTo(1, 5);
+  });
+});

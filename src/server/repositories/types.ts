@@ -1,4 +1,4 @@
-import type { TrackingMode } from "@worktracker/core";
+import type { TrackingMode, TrackingModeChange } from "@worktracker/core";
 
 export type Platform = "windows" | "mac";
 
@@ -24,15 +24,42 @@ export interface NewDevice {
 export interface DeviceSettingsUpdate {
   idleThresholdMinutes?: number;
   pollIntervalSeconds?: number;
-  trackingMode?: TrackingMode;
+}
+
+/** A device plus the slice of its tracking-mode history relevant to one query range. */
+export interface DeviceWithModeHistory extends Device {
+  /** Sorted ascending by `effectiveFrom` (ties in insertion order). */
+  modeHistory: TrackingModeChange[];
 }
 
 export interface DevicesRepository {
+  /** Creates the device and its initial tracking-mode history row (`auto`, effective from `createdAt`). */
   create(device: NewDevice): Promise<Device>;
   list(): Promise<Device[]>;
+  /**
+   * Same devices as `list()`, each with the part of its tracking-mode
+   * history needed to classify activity in `[rangeStartMs, endExclusiveMs)`:
+   * every change before `endExclusiveMs`, starting at the one in effect at
+   * the device's own buffered range start (`rangeStartMs` minus its idle
+   * threshold — see `bufferedRangeStart`). The device's first-ever row is
+   * always included, even if it lies after the range, since activity that
+   * predates all history is classified with the oldest known mode. Fetched together with the device
+   * list rather than as a separate query, to keep database round trips flat
+   * (docs/PLAN_TRACKER_MODE_TOGGLE.md, "Neon load budget").
+   */
+  listWithTrackingModeHistory(rangeStartMs: number, endExclusiveMs: number): Promise<DeviceWithModeHistory[]>;
   getById(id: string): Promise<Device | null>;
   getByApiKeyHash(apiKeyHash: string): Promise<Device | null>;
   updateSettings(id: string, update: DeviceSettingsUpdate): Promise<Device | null>;
+  /**
+   * Sets the device's current tracking mode and, only if it actually
+   * changed, appends a history row effective from `atMs` — atomically, so
+   * `devices.tracking_mode` and the history can't drift apart. Returns
+   * null for an unknown device.
+   */
+  setTrackingMode(id: string, mode: TrackingMode, atMs: number): Promise<Device | null>;
+  /** The tracking-mode change currently in effect for the device (its latest history row), or null. */
+  getCurrentTrackingModeChange(id: string): Promise<TrackingModeChange | null>;
   touchLastSeen(id: string, atMs: number): Promise<void>;
   revoke(id: string, atMs: number): Promise<boolean>;
   /**
@@ -44,8 +71,8 @@ export interface DevicesRepository {
   restore(id: string): Promise<boolean>;
   /**
    * Hard-deletes the device row itself (as opposed to `revoke`'s soft
-   * revoke). Callers must `orphanEventsForDevice` first — this does not
-   * touch `activity_events`.
+   * revoke), together with its tracking-mode history. Callers must
+   * `orphanEventsForDevice` first — this does not touch `activity_events`.
    */
   delete(id: string): Promise<boolean>;
 }

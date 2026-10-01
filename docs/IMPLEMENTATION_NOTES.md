@@ -412,3 +412,42 @@ Two related fixes, found while investigating "extreme Fluid Active CPU" usage:
   of the v1.21 classification and the current service code, entirely
   locally. Used as the acceptance check when classification changes, so
   verifying doesn't cost repeated full-history stats scans on Neon.
+
+## Tracking-mode history: classification by the mode in effect at the time (v1.23)
+
+Phase 1 of `docs/PLAN_TRACKER_MODE_TOGGLE.md`. Before, `classifyDay()` ran
+against each device's *current* `trackingMode`, so changing it reclassified
+the device's entire history. Now:
+
+- New table `device_tracking_mode_history` (see `DATA_MODEL.md`), written
+  with the device on `create()` and on every actual change by
+  `setTrackingMode()`. Both Postgres writes are single statements with
+  data-modifying CTEs rather than `BEGIN … COMMIT` transactions: equally
+  atomic, one round trip instead of four. `updateSettings()` no longer
+  touches `tracking_mode`.
+- `classifySlices()` (`packages/core/src/classification.ts`) cuts day-slices
+  at mode changes and classifies each piece by the mode in effect at its
+  start.
+- `listWithTrackingModeHistory()` returns the history inside the device-list
+  query (correlated `json_agg` subquery), bounded per device: from the
+  change in effect at the device's own buffered range start (range start
+  minus its idle threshold) up to the range end, plus its first-ever row.
+  That first row matters: without it, a range lying entirely before all of a
+  device's history rows got an empty history, and the classifier fell back
+  to the device's *current* mode instead of its oldest one. The existing
+  route tests passed only because of that bug (their events predate the
+  device's creation in real time), which is how it was caught.
+- The SQL was verified against PGlite (Postgres compiled to WASM), comparing
+  `listWithTrackingModeHistory` with the in-memory implementation over 294
+  ranges, plus the migration's seed/reconcile/re-run behavior. Neither is
+  part of the test suite: the project has no local Postgres in CI.
+- The golden-numbers check now loads the history too. Its own test fixture
+  first hid a mismatch: activity bursts 20 minutes apart are dropped as
+  noise after an idle gap by the resume-confirmation rule (a confirming event
+  within 60 s is required), so the fixture now includes one.
+
+**Rollout:** run `scripts/migrations/2026-10-01-tracking-mode-history.mjs`
+before deploying (the v1.22 code ignores the new table, so this is safe), deploy,
+run the migration once more to reconcile any mode change made through the
+old server in between, then export and run
+`scripts/golden-numbers.ts check`. It must report no mismatches.

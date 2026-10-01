@@ -1,7 +1,7 @@
 import {
   bufferedRangeStart,
   calculateSessions,
-  classifyDay,
+  classifySlices,
   effectiveResumeConfirmationWindow,
   mergeSessions,
   mergeSessionsWithDeviceIds,
@@ -9,10 +9,11 @@ import {
   type AttributedSession,
   type TimeZone,
   type TrackingMode,
+  type TrackingModeChange,
   type WorkSession,
   type WorkType,
 } from "@worktracker/core";
-import type { ActivityEventsRepository, DevicesRepository } from "../repositories/types.js";
+import type { ActivityEventsRepository, DevicesRepository, DeviceWithModeHistory } from "../repositories/types.js";
 
 /**
  * Sentinel "device id" for events whose real device was permanently deleted
@@ -33,7 +34,10 @@ const ORPHANED_TRACKING_MODE: TrackingMode = "auto";
 
 interface PerDeviceSessions {
   deviceId: string;
+  /** Current mode — the classification fallback for a device without history rows. */
   trackingMode: TrackingMode;
+  /** Only loaded when classifying (`withModeHistory`); empty otherwise. */
+  modeHistory: TrackingModeChange[];
   sessions: WorkSession[];
 }
 
@@ -46,6 +50,11 @@ interface PerDeviceSessions {
  * historical activity remains valid data. In the aggregated view (no
  * `deviceId` filter), events orphaned by a permanently-deleted device (see
  * `ORPHANED_DEVICE_ID`) are folded in too, using default settings.
+ *
+ * `withModeHistory` additionally loads each device's tracking-mode history
+ * for the range — in the same query as the device list, and only when a
+ * caller actually classifies work/leisure, so unfiltered views cost nothing
+ * extra (docs/PLAN_TRACKER_MODE_TOGGLE.md, "Neon load budget").
  */
 async function getPerDeviceSessions(
   devicesRepo: DevicesRepository,
@@ -53,8 +62,11 @@ async function getPerDeviceSessions(
   startMs: number,
   endExclusiveMs: number,
   deviceId?: string,
+  withModeHistory = false,
 ): Promise<PerDeviceSessions[]> {
-  const allDevices = await devicesRepo.list();
+  const allDevices: DeviceWithModeHistory[] = withModeHistory
+    ? await devicesRepo.listWithTrackingModeHistory(startMs, endExclusiveMs)
+    : (await devicesRepo.list()).map((d) => ({ ...d, modeHistory: [] }));
   const devices = deviceId ? allDevices.filter((d) => d.id === deviceId) : allDevices;
 
   const perDevice = await Promise.all(
@@ -68,6 +80,7 @@ async function getPerDeviceSessions(
       return {
         deviceId: device.id,
         trackingMode: device.trackingMode,
+        modeHistory: device.modeHistory,
         sessions: calculateSessions(timestamps, idleThresholdMs, resumeConfirmationWindowMs),
       };
     }),
@@ -82,6 +95,7 @@ async function getPerDeviceSessions(
       perDevice.push({
         deviceId: ORPHANED_DEVICE_ID,
         trackingMode: ORPHANED_TRACKING_MODE,
+        modeHistory: [],
         sessions: calculateSessions(timestamps, idleThresholdMs, resumeConfirmationWindowMs),
       });
     }
@@ -91,19 +105,20 @@ async function getPerDeviceSessions(
 }
 
 /**
- * Restricts each device's sessions to the day-slices classified as
- * `workType` for that device (`classifyDay`, using its own `trackingMode`).
- * Classification happens per device, per calendar day — a device left on
- * "auto" can contribute work time on a weekday and leisure time on the
- * weekend within the very same query range, which a whole-range or
- * whole-day filter can't express.
+ * Restricts each device's sessions to the pieces classified as `workType`
+ * for that device (`classifySlices`): split per calendar day, and further at
+ * every change in the device's tracking-mode history, each piece classified
+ * by the mode in effect *when it happened*. A device left on "auto" can
+ * contribute work time on a weekday and leisure time on the weekend within
+ * the very same query range, and a device switched mid-day contributes both
+ * on the same day.
  */
 function filterByWorkType(perDevice: readonly PerDeviceSessions[], timeZone: TimeZone, workType: WorkType): PerDeviceSessions[] {
-  return perDevice.map(({ deviceId, trackingMode, sessions }) => {
-    const matching = splitByDay(sessions, timeZone)
-      .filter((slice) => classifyDay(slice.date, trackingMode) === workType)
+  return perDevice.map(({ deviceId, trackingMode, modeHistory, sessions }) => {
+    const matching = classifySlices(splitByDay(sessions, timeZone), modeHistory, trackingMode)
+      .filter((slice) => slice.workType === workType)
       .map((slice): WorkSession => ({ start: slice.start, end: slice.end }));
-    return { deviceId, trackingMode, sessions: matching };
+    return { deviceId, trackingMode, modeHistory, sessions: matching };
   });
 }
 
@@ -140,7 +155,7 @@ export async function getAttributedSessionsInRange(
   workType: WorkType | "all" = "all",
   deviceId?: string,
 ): Promise<AttributedSession[]> {
-  let perDevice = await getPerDeviceSessions(devicesRepo, eventsRepo, startMs, endExclusiveMs, deviceId);
+  let perDevice = await getPerDeviceSessions(devicesRepo, eventsRepo, startMs, endExclusiveMs, deviceId, workType !== "all");
   if (workType !== "all") {
     perDevice = filterByWorkType(perDevice, timeZone, workType);
   }
@@ -166,7 +181,7 @@ export async function getClassifiedSessionsInRange(
   deviceId?: string,
 ): Promise<WorkSession[]> {
   const perDevice = filterByWorkType(
-    await getPerDeviceSessions(devicesRepo, eventsRepo, startMs, endExclusiveMs, deviceId),
+    await getPerDeviceSessions(devicesRepo, eventsRepo, startMs, endExclusiveMs, deviceId, true),
     timeZone,
     workType,
   );

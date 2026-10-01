@@ -54,3 +54,25 @@ When loading events for any date range `[start, endExclusive)` to compute sessio
 ## Default value
 
 `resumeConfirmationWindow` default is **60 seconds**. If the tracker's configured poll interval is larger than 30 seconds, widen the effective confirmation window to `max(60s, 2 × pollInterval)` — the window should comfortably fit at least two poll cycles, or genuine resumptions could be wrongly rejected as unconfirmed.
+
+## Work/leisure classification (built on top of sessions)
+
+Classification never changes how sessions are computed; it only decides
+which bucket each piece of a session counts toward, per device:
+
+1. Split the device's sessions at local midnight (`splitByDay`, in
+   `APP_TIME_ZONE`).
+2. Split those day-slices again at every change in the device's tracking-mode
+   history (`splitAtInstants`).
+3. Classify each piece with `classifyDay(date, mode)`, where `mode` is the
+   history entry in effect at the piece's start (`trackingModeAt`): the
+   latest entry with `effectiveFrom <= start`; for equal instants the later
+   entry wins; before the first entry, the first entry's mode; with no
+   history at all, the device's current mode. `classifyDay`: `auto` →
+   Mon-Fri work, Sat-Sun leisure; `alwaysWork` / `alwaysLeisure` regardless
+   of the day.
+4. Merge the matching pieces across devices (`mergeSessions`), as for
+   unclassified views.
+
+Because history entries are only ever appended with the server's current
+time, the classification of already-tracked time never changes.

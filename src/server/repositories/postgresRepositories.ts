@@ -1,9 +1,10 @@
 import type { Pool } from "pg";
-import type { TrackingMode } from "@worktracker/core";
+import type { TrackingMode, TrackingModeChange } from "@worktracker/core";
 import type {
   ActivityEventsRepository,
   Device,
   DeviceSettingsUpdate,
+  DeviceWithModeHistory,
   DevicesRepository,
   GlobalSettings,
   NewDevice,
@@ -44,10 +45,17 @@ export class PostgresDevicesRepository implements DevicesRepository {
   constructor(private readonly pool: Pool) {}
 
   async create(device: NewDevice): Promise<Device> {
+    // One statement, so the device and its initial history row are atomic.
     const result = await this.pool.query<DeviceRow>(
-      `INSERT INTO devices (name, platform, api_key_hash)
-       VALUES ($1, $2, $3)
-       RETURNING *`,
+      `WITH created AS (
+         INSERT INTO devices (name, platform, api_key_hash)
+         VALUES ($1, $2, $3)
+         RETURNING *
+       ), initial_mode AS (
+         INSERT INTO device_tracking_mode_history (device_id, tracking_mode, effective_from)
+         SELECT id, tracking_mode, created_at FROM created
+       )
+       SELECT * FROM created`,
       [device.name, device.platform, device.apiKeyHash],
     );
     return toDevice(result.rows[0]!);
@@ -56,6 +64,46 @@ export class PostgresDevicesRepository implements DevicesRepository {
   async list(): Promise<Device[]> {
     const result = await this.pool.query<DeviceRow>(`SELECT * FROM devices ORDER BY created_at ASC`);
     return result.rows.map(toDevice);
+  }
+
+  async listWithTrackingModeHistory(rangeStartMs: number, endExclusiveMs: number): Promise<DeviceWithModeHistory[]> {
+    // The history is aggregated per device inside the device-list query
+    // (no extra round trip), selecting only the two columns classification
+    // needs. The lower bound is the change in effect at the device's own
+    // buffered range start, which depends on its idle threshold.
+    const result = await this.pool.query<DeviceRow & { mode_history: { effectiveFrom: number; mode: TrackingMode }[] }>(
+      `SELECT d.*,
+         COALESCE((
+           SELECT json_agg(
+                    json_build_object(
+                      'effectiveFrom', round(extract(epoch FROM h.effective_from) * 1000)::bigint,
+                      'mode', h.tracking_mode
+                    ) ORDER BY h.effective_from, h.id)
+           FROM device_tracking_mode_history h
+           WHERE h.device_id = d.id
+             -- The device's very first row is always included, even after
+             -- the range: activity predating all history is classified with
+             -- the oldest known mode, not the current one.
+             AND (h.effective_from < $2 OR h.id = (
+               SELECT f.id FROM device_tracking_mode_history f
+               WHERE f.device_id = d.id
+               ORDER BY f.effective_from, f.id
+               LIMIT 1
+             ))
+             AND h.effective_from >= COALESCE((
+               SELECT max(g.effective_from) FROM device_tracking_mode_history g
+               WHERE g.device_id = d.id
+                 AND g.effective_from <= $1::timestamptz - make_interval(mins => d.idle_threshold_minutes)
+             ), '-infinity'::timestamptz)
+         ), '[]'::json) AS mode_history
+       FROM devices d
+       ORDER BY d.created_at ASC`,
+      [new Date(rangeStartMs), new Date(endExclusiveMs)],
+    );
+    return result.rows.map((row) => ({
+      ...toDevice(row),
+      modeHistory: row.mode_history.map((c) => ({ effectiveFrom: Number(c.effectiveFrom), mode: c.mode })),
+    }));
   }
 
   async getById(id: string): Promise<Device | null> {
@@ -72,13 +120,49 @@ export class PostgresDevicesRepository implements DevicesRepository {
     const result = await this.pool.query<DeviceRow>(
       `UPDATE devices
        SET idle_threshold_minutes = COALESCE($2, idle_threshold_minutes),
-           poll_interval_seconds = COALESCE($3, poll_interval_seconds),
-           tracking_mode = COALESCE($4, tracking_mode)
+           poll_interval_seconds = COALESCE($3, poll_interval_seconds)
        WHERE id = $1
        RETURNING *`,
-      [id, update.idleThresholdMinutes ?? null, update.pollIntervalSeconds ?? null, update.trackingMode ?? null],
+      [id, update.idleThresholdMinutes ?? null, update.pollIntervalSeconds ?? null],
     );
     return result.rows[0] ? toDevice(result.rows[0]) : null;
+  }
+
+  async setTrackingMode(id: string, mode: TrackingMode, atMs: number): Promise<Device | null> {
+    // A single statement is atomic without an explicit transaction (and
+    // costs one round trip instead of four). `FOR UPDATE` serializes
+    // concurrent switches of the same device; the history row is only
+    // written when the value actually changes. Data-modifying CTEs aren't
+    // visible to the outer SELECT, which therefore reads the pre-update
+    // row — `tracking_mode` is patched to the new value below.
+    const result = await this.pool.query<DeviceRow>(
+      `WITH current AS (
+         SELECT id, tracking_mode FROM devices WHERE id = $1 FOR UPDATE
+       ), changed AS (
+         UPDATE devices d SET tracking_mode = $2
+         FROM current
+         WHERE d.id = current.id AND current.tracking_mode <> $2
+         RETURNING d.id
+       ), history AS (
+         INSERT INTO device_tracking_mode_history (device_id, tracking_mode, effective_from)
+         SELECT id, $2, $3 FROM changed
+       )
+       SELECT d.* FROM devices d JOIN current ON current.id = d.id`,
+      [id, mode, new Date(atMs)],
+    );
+    return result.rows[0] ? { ...toDevice(result.rows[0]), trackingMode: mode } : null;
+  }
+
+  async getCurrentTrackingModeChange(id: string): Promise<TrackingModeChange | null> {
+    const result = await this.pool.query<{ effective_from: Date; tracking_mode: TrackingMode }>(
+      `SELECT effective_from, tracking_mode FROM device_tracking_mode_history
+       WHERE device_id = $1
+       ORDER BY effective_from DESC, id DESC
+       LIMIT 1`,
+      [id],
+    );
+    const row = result.rows[0];
+    return row ? { effectiveFrom: row.effective_from.getTime(), mode: row.tracking_mode } : null;
   }
 
   async touchLastSeen(id: string, atMs: number): Promise<void> {

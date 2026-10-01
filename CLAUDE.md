@@ -145,14 +145,25 @@ tray shell) has never been run outside Windows — see
   `mergeSessionsWithDeviceIds`, dimension 1 — colors the Timeline chart per
   device, sliced at the exact instant the active device set changes, not the
   whole span a session happened to touch) and **work/leisure classification**
-  (`getClassifiedSessionsInRange` / `classifyDay`, dimension 2 — each
-  device's `trackingMode` column, default `"auto"`, overrides the
+  (`getClassifiedSessionsInRange` / `classifySlices`, dimension 2 — each
+  device's tracking mode, default `"auto"`, overrides the
   weekday=work/weekend=leisure default per device). They're deliberately kept
   orthogonal rather than merged into one color channel — see
   `docs/API_CONTRACT.md`'s "Device attribution" section for why. Classifying
-  happens *before* merging (`splitByDay` then `classifyDay` per device, per
-  calendar day) since a device left on `auto` can contribute both work and
-  leisure time within the same query range.
+  happens *before* merging (`splitByDay`, then `classifySlices` per device)
+  since a device left on `auto` can contribute both work and leisure time
+  within the same query range.
+- **Classification uses the mode in effect at the time, not the current
+  one.** `devices.tracking_mode` is only the current value; every change is
+  also appended to `device_tracking_mode_history` with the server's receive
+  time (`setTrackingMode`, one atomic statement, only on an actual change),
+  and sessions are cut at each change (`classifySlices`). So a mode change
+  never reclassifies past time — there's deliberately no way to backdate one.
+  The history is loaded only for `?workType=` requests and in the same query
+  as the device list (`listWithTrackingModeHistory`), to keep Neon load flat.
+  Tests that classify must set the mode *before* their events' timestamps —
+  route tests do this via the injectable clock (`AppDependencies.now`,
+  `ctx.clock.nowMs`).
 - **Two-step device deletion.** `DELETE /api/devices/:id` soft-revokes
   (unchanged); `DELETE /api/devices/:id?permanent=true` hard-deletes the row,
   but only once already revoked (a safety gate, not a data-integrity

@@ -1756,7 +1756,7 @@
           await updateDeviceSettings(device.id, { trackingMode: mode });
           modeButtons.forEach(b => b.setAttribute("aria-pressed", "false"));
           btn.setAttribute("aria-pressed", "true");
-          showToast("Tracking mode saved");
+          showToast("Tracking mode saved — applies from now on");
         } catch (err) {
           showToast("Could not save tracking mode", true);
         }
@@ -1767,6 +1767,13 @@
     modeLabel.appendChild(modeGroup);
     modeRow.appendChild(modeLabel);
     row.appendChild(modeRow);
+    // Classification uses the mode in effect when the time was tracked, so a
+    // change here never reclassifies the past (it can also be switched from
+    // the tracker's own menu).
+    const modeHint = document.createElement("div");
+    modeHint.className = "hint";
+    modeHint.textContent = "Applies from now on; time already tracked keeps its classification.";
+    row.appendChild(modeHint);
 
     // Permanent deletion is only offered once a device is already revoked —
     // a safety gate against removing a device that's still actively

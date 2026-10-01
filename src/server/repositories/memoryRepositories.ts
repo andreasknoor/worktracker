@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
+import type { TrackingMode, TrackingModeChange } from "@worktracker/core";
 import type {
   ActivityEventsRepository,
   Device,
   DeviceSettingsUpdate,
+  DeviceWithModeHistory,
   DevicesRepository,
   GlobalSettings,
   NewDevice,
@@ -12,10 +14,20 @@ import { DEFAULT_GLOBAL_SETTINGS } from "./types.js";
 
 export class InMemoryDevicesRepository implements DevicesRepository {
   private readonly devices = new Map<string, Device>();
+  /** Mirrors `device_tracking_mode_history`; array order stands in for the bigserial id (tie-breaker). */
+  private readonly modeHistory: { deviceId: string; change: TrackingModeChange }[] = [];
 
-  /** Inserts a fully-specified device as-is (fixed id/createdAt) — for tests and offline tooling. */
+  /** `now` stands in for the database's `now()` default on `created_at`. */
+  constructor(private readonly now: () => number = Date.now) {}
+
+  /** Inserts a fully-specified device as-is (fixed id/createdAt, no history row) — for tests and offline tooling. */
   seedDevice(device: Device): void {
     this.devices.set(device.id, { ...device });
+  }
+
+  /** Appends a raw history row as-is — for tests and offline tooling. */
+  seedTrackingModeChange(deviceId: string, mode: TrackingMode, effectiveFrom: number): void {
+    this.modeHistory.push({ deviceId, change: { effectiveFrom, mode } });
   }
 
   async create(device: NewDevice): Promise<Device> {
@@ -27,16 +39,51 @@ export class InMemoryDevicesRepository implements DevicesRepository {
       idleThresholdMinutes: 30,
       pollIntervalSeconds: 30,
       trackingMode: "auto",
-      createdAt: Date.now(),
+      createdAt: this.now(),
       lastSeenAt: null,
       revokedAt: null,
     };
     this.devices.set(created.id, created);
+    this.modeHistory.push({ deviceId: created.id, change: { effectiveFrom: created.createdAt, mode: created.trackingMode } });
     return created;
   }
 
   async list(): Promise<Device[]> {
     return [...this.devices.values()];
+  }
+
+  async listWithTrackingModeHistory(rangeStartMs: number, endExclusiveMs: number): Promise<DeviceWithModeHistory[]> {
+    return [...this.devices.values()].map((device) => {
+      const all = this.historyFor(device.id);
+      // The first row is always kept (see the Postgres implementation).
+      const sorted = all.filter((c, i) => i === 0 || c.effectiveFrom < endExclusiveMs);
+      const bufferedStart = rangeStartMs - device.idleThresholdMinutes * 60_000;
+      const governing = sorted.filter((c) => c.effectiveFrom <= bufferedStart).at(-1);
+      const lowerBound = governing?.effectiveFrom ?? -Infinity;
+      return { ...device, modeHistory: sorted.filter((c) => c.effectiveFrom >= lowerBound) };
+    });
+  }
+
+  async setTrackingMode(id: string, mode: TrackingMode, atMs: number): Promise<Device | null> {
+    const device = this.devices.get(id);
+    if (!device) return null;
+    if (device.trackingMode === mode) return device;
+    const updated: Device = { ...device, trackingMode: mode };
+    this.devices.set(id, updated);
+    this.modeHistory.push({ deviceId: id, change: { effectiveFrom: atMs, mode } });
+    return updated;
+  }
+
+  async getCurrentTrackingModeChange(id: string): Promise<TrackingModeChange | null> {
+    return this.historyFor(id).at(-1) ?? null;
+  }
+
+  /** The device's history sorted like `ORDER BY effective_from, id` (sort is stable). */
+  private historyFor(deviceId: string): TrackingModeChange[] {
+    return this.modeHistory
+      .filter((h) => h.deviceId === deviceId)
+      .map((h) => ({ ...h.change }))
+      .sort((a, b) => a.effectiveFrom - b.effectiveFrom);
   }
 
   async getById(id: string): Promise<Device | null> {
@@ -57,7 +104,6 @@ export class InMemoryDevicesRepository implements DevicesRepository {
       ...device,
       idleThresholdMinutes: update.idleThresholdMinutes ?? device.idleThresholdMinutes,
       pollIntervalSeconds: update.pollIntervalSeconds ?? device.pollIntervalSeconds,
-      trackingMode: update.trackingMode ?? device.trackingMode,
     };
     this.devices.set(id, updated);
     return updated;
@@ -84,6 +130,10 @@ export class InMemoryDevicesRepository implements DevicesRepository {
   }
 
   async delete(id: string): Promise<boolean> {
+    // Mirrors ON DELETE CASCADE on device_tracking_mode_history.
+    for (let i = this.modeHistory.length - 1; i >= 0; i -= 1) {
+      if (this.modeHistory[i]!.deviceId === id) this.modeHistory.splice(i, 1);
+    }
     return this.devices.delete(id);
   }
 }

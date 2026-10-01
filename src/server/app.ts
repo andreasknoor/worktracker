@@ -121,9 +121,10 @@ function filterSessionsByDayType(sessions: readonly WorkSession[], dayType: DayT
 // ---------- Work-type filtering (?workType=work|leisure|all) ----------
 //
 // A second, independent filter dimension from `?dayType=` above: classifies
-// logged time as work or leisure per device (`classifyDay`, using each
-// device's own `trackingMode`) rather than by raw calendar day alone. Both
-// filters can be applied at once. See docs/API_CONTRACT.md.
+// logged time as work or leisure per device (`classifySlices`, using the
+// tracking mode each device had when the activity happened) rather than by
+// raw calendar day alone. Both filters can be applied at once. See
+// docs/API_CONTRACT.md.
 
 const WORK_TYPE_VALUES: readonly WorkType[] = ["work", "leisure"];
 
@@ -702,7 +703,19 @@ export function createApp(deps: AppDependencies): Hono {
       return c.json({ error: `trackingMode must be one of: ${TRACKING_MODE_VALUES.join(", ")}` }, 400);
     }
 
-    const updated = await deps.devices.updateSettings(id, body);
+    // trackingMode goes through setTrackingMode, which also records the
+    // change in the device's tracking-mode history — effective from now, so
+    // it never reclassifies time that was already tracked.
+    const { trackingMode, ...settings } = body;
+    let updated = null;
+    if (settings.idleThresholdMinutes !== undefined || settings.pollIntervalSeconds !== undefined || trackingMode === undefined) {
+      updated = await deps.devices.updateSettings(id, settings);
+      if (!updated) return c.json({ error: "Device not found" }, 404);
+    }
+    if (trackingMode !== undefined) {
+      updated = await deps.devices.setTrackingMode(id, trackingMode, now());
+      if (!updated) return c.json({ error: "Device not found" }, 404);
+    }
     if (!updated) return c.json({ error: "Device not found" }, 404);
 
     return c.json({

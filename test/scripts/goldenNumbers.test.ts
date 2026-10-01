@@ -6,8 +6,9 @@ const MINUTE = 60_000;
 const monday = Date.UTC(2026, 2, 9);
 const saturday = Date.UTC(2026, 2, 14);
 
+/** One hour of activity. The 30 s event confirms the resumption after an idle gap (resume-confirmation rule). */
 function hourOfActivity(startMs: number): number[] {
-  return [0, 20, 40, 60].map((m) => startMs + m * MINUTE);
+  return [0, 0.5, 20, 40, 60].map((m) => startMs + m * MINUTE);
 }
 
 function baseExport(): GoldenExport {
@@ -55,5 +56,26 @@ describe("golden-numbers check", () => {
     const data = { ...baseExport(), events: {} };
     const result = await compareGoldenNumbers(data, "Europe/Berlin", Date.UTC(2026, 2, 16));
     expect(result).toEqual({ rangeStart: null, rangeEndExclusive: null, daysCompared: 0, mismatches: [] });
+  });
+
+  it("finds no mismatches for the migration's seed (one row per device at created_at)", async () => {
+    const data = baseExport();
+    data.trackingModeHistory = data.devices.map((d) => ({ deviceId: d.id, trackingMode: d.trackingMode, effectiveFrom: d.createdAt }));
+    const result = await compareGoldenNumbers(data, "Europe/Berlin", Date.UTC(2026, 2, 16));
+    expect(result.mismatches).toEqual([]);
+  });
+
+  it("reports the days a mid-history switch reclassifies", async () => {
+    const data = baseExport();
+    const pc = data.devices[0]!;
+    data.trackingModeHistory = [
+      { deviceId: pc.id, trackingMode: "auto", effectiveFrom: pc.createdAt },
+      // The Company PC was only switched to alwaysWork after its Saturday hour.
+      { deviceId: pc.id, trackingMode: "alwaysWork", effectiveFrom: Date.UTC(2026, 2, 15) },
+    ];
+    const result = await compareGoldenNumbers(data, "Europe/Berlin", Date.UTC(2026, 2, 16));
+    expect(new Set(result.mismatches.map((m) => `${m.workType} ${m.date}`))).toEqual(
+      new Set(["work 2026-03-14", "leisure 2026-03-14"]),
+    );
   });
 });

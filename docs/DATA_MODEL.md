@@ -14,10 +14,33 @@ One row per tracker installation (one Windows laptop, one Mac laptop, etc.).
 | `api_key_hash` | text | hash of the device's API key (never store the raw key) |
 | `idle_threshold_minutes` | integer | per-device, not global — see `IMPLEMENTATION_NOTES.md` |
 | `poll_interval_seconds` | integer | per-device, not global — see `IMPLEMENTATION_NOTES.md` |
-| `tracking_mode` | text | `"auto"` (default) \| `"alwaysWork"` \| `"alwaysLeisure"` — overrides the default weekday=work/weekend=leisure classification for this device's logged time; see `API_CONTRACT.md`'s "Work/leisure filtering" |
+| `tracking_mode` | text | `"auto"` (default) \| `"alwaysWork"` \| `"alwaysLeisure"` — the device's **current** work/leisure mode (overrides the default weekday=work/weekend=leisure classification). Classification itself uses `device_tracking_mode_history` below, so changing this never reclassifies past time; see `API_CONTRACT.md`'s "Work/leisure filtering" |
 | `created_at` | timestamptz | |
 | `last_seen_at` | timestamptz, nullable | updated on each successful event ingest |
 | `revoked_at` | timestamptz, nullable | soft-revoke (`DELETE /api/devices/{id}`) — key stops working, row and history stay intact. A device can additionally be hard-deleted (`?permanent=true`, only once already revoked) via `DevicesRepository.delete`; see `activity_events.device_id` below for what happens to its events. |
+
+## `device_tracking_mode_history`
+
+Every `tracking_mode` a device has had, and from when. Work/leisure
+classification uses the mode **in effect when the activity happened**
+(`classifySlices` in `packages/core/src/classification.ts`).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigserial PK | tie-breaker for two rows with the same `effective_from` (the later row wins) |
+| `device_id` | uuid FK → `devices.id`, `ON DELETE CASCADE` | a permanently deleted device's history goes with it; its orphaned events fall back to `auto` |
+| `tracking_mode` | text | same values as `devices.tracking_mode` |
+| `effective_from` | timestamptz | server time when the change was received — never client-supplied and never in the past, so a classified time slice never changes afterwards |
+| `created_at` | timestamptz | insert time (ops/debugging only) |
+
+Index: `(device_id, effective_from)`. A device's first row is written with
+the device itself (`auto`, effective from `created_at`); existing devices
+were seeded with their mode at migration time, effective from `created_at`
+(`scripts/migrations/2026-10-01-tracking-mode-history.mjs`). A new row is
+only written when the mode actually changes, together with
+`devices.tracking_mode` in one atomic statement. Activity before a device's
+first row uses that first row's mode; a device without rows uses
+`devices.tracking_mode`.
 
 ## `activity_events`
 

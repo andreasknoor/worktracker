@@ -89,6 +89,9 @@ export function loadIntoRepositories(data: GoldenExport): {
   for (const [key, timestamps] of Object.entries(data.events)) {
     events.seedEvents(key === ORPHANED_EVENTS_KEY ? null : key, timestamps);
   }
+  for (const change of data.trackingModeHistory ?? []) {
+    devices.seedTrackingModeChange(change.deviceId, change.trackingMode, change.effectiveFrom);
+  }
   return { devices, events };
 }
 

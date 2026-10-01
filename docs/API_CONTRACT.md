@@ -192,7 +192,7 @@ Request: `{ "name": "...", "platform": "windows" | "mac" }`. `name` is trimmed a
 ```
 
 ### `PATCH /api/devices/{id}`
-Request: `{ "idleThresholdMinutes"?: number, "pollIntervalSeconds"?: number, "trackingMode"?: "auto" | "alwaysWork" | "alwaysLeisure" }` (any subset). `idleThresholdMinutes`/`pollIntervalSeconds`, if present, must be `> 0`; `trackingMode`, if present, must be one of the three listed values — else `400`. `404` if the id isn't a valid uuid or doesn't match a device. Returns the updated device (same shape as one `GET /api/devices` entry, minus `apiKey`).
+Request: `{ "idleThresholdMinutes"?: number, "pollIntervalSeconds"?: number, "trackingMode"?: "auto" | "alwaysWork" | "alwaysLeisure" }` (any subset). `idleThresholdMinutes`/`pollIntervalSeconds`, if present, must be `> 0`; `trackingMode`, if present, must be one of the three listed values — else `400`. `404` if the id isn't a valid uuid or doesn't match a device. Returns the updated device (same shape as one `GET /api/devices` entry, minus `apiKey`). A `trackingMode` change takes effect **from the time the request is received** (it's appended to the device's tracking-mode history, see `DATA_MODEL.md`); time tracked before keeps its classification. Re-sending the current mode is a no-op.
 
 ### `DELETE /api/devices/{id}`
 Revokes the device's key (soft-revoke — see `DATA_MODEL.md`). `204` on success, `404` if the id isn't a valid uuid or doesn't match a device.
@@ -230,9 +230,12 @@ additionally accept `?workType=work|leisure|all` (default `all`; `400` on an
 unrecognized value). `dayType` and `workType` can be combined — they're
 applied independently, not as alternatives.
 
-Classification is per device, per calendar day, via each device's
-`trackingMode` (see the devices section above), *not* a raw weekday/weekend
-check on the query range as a whole:
+Classification is per device, per calendar day, via the `trackingMode` each
+device had **when the activity happened** (its tracking-mode history, see
+`DATA_MODEL.md`) — *not* its current mode, and *not* a raw weekday/weekend
+check on the query range as a whole. A session is cut at every mode change,
+so a device switched mid-day contributes both work and leisure time to that
+day:
 - `auto` (the default): weekday → work, weekend → leisure.
 - `alwaysWork` / `alwaysLeisure`: pins that device's time regardless of day —
   e.g. a company PC whose weekend activity should still count as work.

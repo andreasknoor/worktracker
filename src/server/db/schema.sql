@@ -31,6 +31,23 @@ CREATE TABLE devices (
 
 CREATE UNIQUE INDEX devices_api_key_hash_idx ON devices (api_key_hash);
 
+-- Every tracking_mode a device has had, and from when. Work/leisure
+-- classification uses the mode in effect when the activity happened (see
+-- classifySlices() in packages/core/src/classification.ts), so changing a
+-- device's mode never reclassifies its past. devices.tracking_mode stays the
+-- current value; both are written together (setTrackingMode in
+-- postgresRepositories.ts). A device's first row is effective from its
+-- created_at.
+CREATE TABLE device_tracking_mode_history (
+  id             bigserial PRIMARY KEY,
+  device_id      uuid NOT NULL REFERENCES devices (id) ON DELETE CASCADE,
+  tracking_mode  text NOT NULL CHECK (tracking_mode IN ('auto', 'alwaysWork', 'alwaysLeisure')),
+  effective_from timestamptz NOT NULL,
+  created_at     timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX device_tracking_mode_history_device_idx ON device_tracking_mode_history (device_id, effective_from);
+
 CREATE TABLE activity_events (
   id            bigserial PRIMARY KEY,
   -- Nullable: permanently deleting a device (as opposed to soft-revoking it)
