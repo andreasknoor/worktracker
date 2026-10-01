@@ -10,11 +10,20 @@ set -e
 
 cd "$(dirname "$0")"
 
+# Build with the full Xcode toolchain when the active developer directory is
+# CommandLineTools: a CommandLineTools build linked against an older SDK
+# produced a Settings window whose text fields rendered empty. An explicit
+# DEVELOPER_DIR from the caller always wins.
+if [ -z "$DEVELOPER_DIR" ] && xcode-select -p 2>/dev/null | grep -q CommandLineTools \
+  && [ -d /Applications/Xcode.app/Contents/Developer ]; then
+  export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+  echo "Using Xcode toolchain: $DEVELOPER_DIR"
+fi
+
 CONFIGURATION="${1:-release}"
-BIN_PATH=".build/$(swift build -c "$CONFIGURATION" --show-bin-path 2>/dev/null | tail -1)/WorkTrackerTracker"
-BIN_PATH=$(swift build -c "$CONFIGURATION" --show-bin-path)/WorkTrackerTracker
 
 swift build -c "$CONFIGURATION"
+BIN_PATH=$(swift build -c "$CONFIGURATION" --show-bin-path)/WorkTrackerTracker
 
 APP_DIR="dist/WorkTrackerTracker.app"
 rm -rf "$APP_DIR"

@@ -70,7 +70,9 @@ swift test    # requires the full Xcode toolchain's XCTest.framework; if
                # DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 ./build-app.sh && open dist/WorkTrackerTracker.app   # run as a real .app bundle,
                # not `swift run` — a bundle-less process has no
-               # CFBundleIdentifier and the menu-bar icon often fails to render
+               # CFBundleIdentifier and the menu-bar icon often fails to render;
+               # the script switches to the Xcode toolchain by itself when
+               # `xcode-select -p` points at CommandLineTools
 ```
 
 Windows tracker (run from `windows-tracker/`):

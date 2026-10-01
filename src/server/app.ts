@@ -173,6 +173,13 @@ export interface AppDependencies {
   devices: DevicesRepository;
   events: ActivityEventsRepository;
   settings: SettingsRepository;
+  /**
+   * The server clock (epoch ms). Injectable so tests can control "now" —
+   * tracking-mode changes take effect at the time they're received, so
+   * tests need to place them relative to the events they classify.
+   * Defaults to `Date.now`.
+   */
+  now?: () => number;
 }
 
 function isoDateKey(d: Date): DateKey {
@@ -207,6 +214,7 @@ async function resolveDeviceIdFilter(c: Context, devicesRepo: DevicesRepository)
 export function createApp(deps: AppDependencies): Hono {
   const app = new Hono();
   const timeZone = appTimeZone();
+  const now = deps.now ?? Date.now;
   const loginAttempts = new Map<string, { count: number; windowStart: number }>();
 
   const isLoginRateLimited = (key: string, nowMs: number): boolean => {
@@ -236,14 +244,14 @@ export function createApp(deps: AppDependencies): Hono {
 
   app.post("/api/auth/login", async (c) => {
     const clientKey = loginClientKey(c);
-    const now = Date.now();
-    if (isLoginRateLimited(clientKey, now)) {
+    const nowMs = now();
+    if (isLoginRateLimited(clientKey, nowMs)) {
       return c.json({ error: "Too many attempts. Try again later." }, 429);
     }
 
     const body = await c.req.json<{ password?: string }>().catch(() => ({ password: undefined }));
     if (!body.password || !verifyDashboardPassword(body.password)) {
-      recordFailedLogin(clientKey, now);
+      recordFailedLogin(clientKey, nowMs);
       return c.json({ error: "Invalid password" }, 401);
     }
 
@@ -442,7 +450,7 @@ export function createApp(deps: AppDependencies): Hono {
     if (endParam !== undefined && !isValidDateKey(endParam)) {
       return c.json({ error: "end must be a valid yyyy-MM-dd date" }, 400);
     }
-    const endExclusive = endParam ?? isoDateKey(addOneDay(new Date()));
+    const endExclusive = endParam ?? isoDateKey(addOneDay(new Date(now())));
     const start = addDays(endExclusive, -days);
 
     const sessions = await getSessionsForRequest(
@@ -481,7 +489,7 @@ export function createApp(deps: AppDependencies): Hono {
     if (endParam !== undefined && !isValidDateKey(endParam)) {
       return c.json({ error: "end must be a valid yyyy-MM-dd date" }, 400);
     }
-    const endExclusive = endParam ?? isoDateKey(addOneDay(new Date()));
+    const endExclusive = endParam ?? isoDateKey(addOneDay(new Date(now())));
     const start = addDays(endExclusive, -days);
 
     const sessions = await getAttributedSessionsInRange(
@@ -517,8 +525,8 @@ export function createApp(deps: AppDependencies): Hono {
     const deviceId = await resolveDeviceIdFilter(c, deps.devices);
     if (deviceId instanceof Response) return deviceId;
 
-    const now = Date.now();
-    const todayKey = isoDateKey(new Date(now));
+    const nowMs = now();
+    const todayKey = isoDateKey(new Date(nowMs));
     // Buffer well past any device's idle threshold so the session that's
     // potentially still running is fully captured.
     const bufferedStart = Date.parse(addDays(todayKey, -1) + "T00:00:00Z");
@@ -538,7 +546,7 @@ export function createApp(deps: AppDependencies): Hono {
       deps.devices,
       deps.events,
       bufferedStart,
-      now + 1,
+      nowMs + 1,
       timeZone,
       "all",
       deviceId,
@@ -549,7 +557,7 @@ export function createApp(deps: AppDependencies): Hono {
     const relevantDevices = deviceId ? allDevices.filter((d) => d.id === deviceId) : allDevices;
     const maxIdleThresholdMs = Math.max(30 * 60_000, ...relevantDevices.map((d) => d.idleThresholdMinutes * 60_000));
 
-    const live = liveView(sessions, now, maxIdleThresholdMs, timeZone);
+    const live = liveView(sessions, nowMs, maxIdleThresholdMs, timeZone);
     const lastSession = sessions[sessions.length - 1];
     const activeDeviceIds =
       live.isActive && lastSession
@@ -736,7 +744,7 @@ export function createApp(deps: AppDependencies): Hono {
     if (!isUuid(id)) return c.json({ error: "Device not found" }, 404);
 
     if (c.req.query("permanent") !== "true") {
-      const revoked = await deps.devices.revoke(id, Date.now());
+      const revoked = await deps.devices.revoke(id, now());
       if (!revoked) return c.json({ error: "Device not found" }, 404);
       return c.body(null, 204);
     }
@@ -781,7 +789,7 @@ export function createApp(deps: AppDependencies): Hono {
     }
 
     await deps.events.insertEvents(device.id, parsed);
-    await deps.devices.touchLastSeen(device.id, Date.now());
+    await deps.devices.touchLastSeen(device.id, now());
 
     return c.body(null, 201);
   });

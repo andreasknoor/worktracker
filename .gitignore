@@ -19,3 +19,6 @@ mac-tracker/.swiftpm/
 windows-tracker/**/bin/
 windows-tracker/**/obj/
 windows-tracker/**/*.user
+
+# Golden-numbers database exports (personal activity data), see scripts/golden-numbers.ts
+golden-export*.json

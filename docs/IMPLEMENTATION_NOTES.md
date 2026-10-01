@@ -391,3 +391,24 @@ Two related fixes, found while investigating "extreme Fluid Active CPU" usage:
   `pool.on("error", ...)` handler (logs, doesn't rethrow) and a 5s
   `connectionTimeoutMillis` so an unreachable database fails a request
   quickly instead of hanging.
+
+## Mac tracker build toolchain + test clock (v1.22)
+
+- **`mac-tracker/build-app.sh` builds with the Xcode toolchain** whenever
+  `xcode-select -p` points at CommandLineTools and Xcode is installed (an
+  explicit `DEVELOPER_DIR` still wins). A CommandLineTools build, linked
+  against an older SDK, showed empty Server URL / API key fields in Settings
+  although `config.json` was intact; the Xcode build didn't. As a second
+  safeguard, `SettingsWindowController` now sizes its zero-frame
+  `NSTextView`s explicitly (frame, min/max size, container size) instead of
+  relying on the enclosing scroll view.
+- **Injectable server clock**: `AppDependencies.now` (default `Date.now`)
+  replaces the direct `Date.now()` calls in `src/server/app.ts`. Preparation
+  for tracking-mode history, whose changes take effect at the time they're
+  received (see `docs/PLAN_TRACKER_MODE_TOGGLE.md`).
+- **Offline golden-numbers check** (`scripts/golden-numbers.ts`): exports
+  `devices`, `activity_events` and the tracking-mode history with one read
+  each, then compares per-day work/leisure/all hours between a frozen copy
+  of the v1.21 classification and the current service code, entirely
+  locally. Used as the acceptance check when classification changes, so
+  verifying doesn't cost repeated full-history stats scans on Neon.

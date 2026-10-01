@@ -13,6 +13,11 @@ import { DEFAULT_GLOBAL_SETTINGS } from "./types.js";
 export class InMemoryDevicesRepository implements DevicesRepository {
   private readonly devices = new Map<string, Device>();
 
+  /** Inserts a fully-specified device as-is (fixed id/createdAt) — for tests and offline tooling. */
+  seedDevice(device: Device): void {
+    this.devices.set(device.id, { ...device });
+  }
+
   async create(device: NewDevice): Promise<Device> {
     const created: Device = {
       id: randomUUID(),
@@ -85,6 +90,15 @@ export class InMemoryDevicesRepository implements DevicesRepository {
 
 export class InMemoryActivityEventsRepository implements ActivityEventsRepository {
   private readonly events: { deviceId: string | null; timestampMs: number }[] = [];
+
+  /**
+   * Bulk-loads events without the duplicate check `insertEvents` does
+   * (which is quadratic) — for offline tooling loading an already-unique
+   * database export. `deviceId: null` loads orphaned events.
+   */
+  seedEvents(deviceId: string | null, timestampsMs: readonly number[]): void {
+    for (const timestampMs of timestampsMs) this.events.push({ deviceId, timestampMs });
+  }
 
   async insertEvents(deviceId: string, timestampsMs: readonly number[]): Promise<void> {
     for (const timestampMs of timestampsMs) {

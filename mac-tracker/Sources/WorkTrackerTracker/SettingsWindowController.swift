@@ -212,8 +212,18 @@ final class SettingsWindowController: NSWindowController {
         textView.isEditable = true
         textView.isSelectable = true
         textView.isRichText = false
+        // The text views are created zero-frame (`NSTextView()`). Builds
+        // linked against an older SDK (CommandLineTools) left them at that
+        // zero size inside the scroll view, so the fields rendered empty
+        // although the config was loaded — size them explicitly instead of
+        // relying on the scroll view to do it.
+        textView.frame = NSRect(x: 0, y: 0, width: fieldWidth, height: height)
+        textView.minSize = NSSize(width: 0, height: height)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.autoresizingMask = [.width]
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
+        textView.textContainer?.containerSize = NSSize(width: fieldWidth, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = true
         textView.allowsUndo = true
         textView.defaultParagraphStyle = wrappingParagraphStyle
