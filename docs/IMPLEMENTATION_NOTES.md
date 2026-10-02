@@ -480,3 +480,14 @@ Phase 2 of `docs/PLAN_TRACKER_MODE_TOGGLE.md`:
   Windows machine (see `windows-tracker/README.md`).
 - `Core` tests target net8.0; on a machine with only a newer .NET runtime,
   run them with `DOTNET_ROLL_FORWARD=Major`.
+
+## Tracking-mode labels without "always" (v1.25)
+
+The menus and dashboard buttons now read **Auto / Work / Leisure** instead of
+"Always work" / "Always leisure". The "always" came from the first version,
+where the mode was a fixed per-device setting and meant "on every day of the
+week, regardless of the weekday rule". Since a mode can be switched any time
+and only applies from that moment on, "always" read like "forever". Only the
+display labels changed. The wire and database values stay `alwaysWork` /
+`alwaysLeisure`, so the API, the history table and existing data are
+untouched.

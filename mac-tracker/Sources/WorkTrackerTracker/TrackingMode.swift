@@ -12,8 +12,8 @@ enum TrackingMode: String, CaseIterable {
     var menuTitle: String {
         switch self {
         case .auto: return "Auto (weekdays work, weekends leisure)"
-        case .alwaysWork: return "Always work"
-        case .alwaysLeisure: return "Always leisure"
+        case .alwaysWork: return "Work"
+        case .alwaysLeisure: return "Leisure"
         }
     }
 }

@@ -45,8 +45,8 @@ public static class TrackingModes
     public static string MenuTitle(TrackingMode mode) => mode switch
     {
         TrackingMode.Auto => "Auto (weekdays work, weekends leisure)",
-        TrackingMode.AlwaysWork => "Always work",
-        TrackingMode.AlwaysLeisure => "Always leisure",
+        TrackingMode.AlwaysWork => "Work",
+        TrackingMode.AlwaysLeisure => "Leisure",
         _ => throw new ArgumentOutOfRangeException(nameof(mode)),
     };
 }

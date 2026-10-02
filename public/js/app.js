@@ -1743,7 +1743,7 @@
     modeGroup.className = "tracking-mode-group";
     modeGroup.setAttribute("role", "group");
     modeGroup.setAttribute("aria-label", "Tracking mode");
-    const MODE_LABELS = { auto: "Auto", alwaysWork: "Always work", alwaysLeisure: "Always leisure" };
+    const MODE_LABELS = { auto: "Auto", alwaysWork: "Work", alwaysLeisure: "Leisure" };
     const modeButtons = Object.keys(MODE_LABELS).map(mode => {
       const btn = document.createElement("button");
       btn.type = "button";

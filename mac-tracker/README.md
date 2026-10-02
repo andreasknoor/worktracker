@@ -49,7 +49,7 @@ On first launch the menu-bar icon shows "Not configured". Open
 `POST /api/devices` in the dashboard's Devices panel.
 
 The **Tracking mode** submenu switches this device between Auto (weekdays
-work, weekends leisure), Always work and Always leisure, effective from that
+work, weekends leisure), Work and Leisure, effective from that
 moment. Time already tracked keeps its classification. A switch needs the
 server to be reachable; it isn't queued. The checkmark also follows changes
 made in the dashboard (the server reports the mode back with every event
