@@ -34,15 +34,6 @@ export interface AttributedSession extends WorkSession {
   deviceIds: string[];
 }
 
-export interface AttributedTimeSegment extends TimeSegment {
-  deviceIds: string[];
-}
-
-export interface AttributedDailySegments {
-  date: DateKey;
-  segments: AttributedTimeSegment[];
-}
-
 /**
  * A session sliced into one sub-interval per calendar day (in `timeZone`) it
  * touches — the same midnight-splitting used by `dailyHours`/`dailySegments`,
@@ -129,32 +120,37 @@ export function dailySegments(
 }
 
 /**
- * Same midnight-splitting idea as `dailySegments`, but for sessions already
- * tagged with the device(s) that contributed to them (see
- * `mergeSessionsWithDeviceIds`) — each resulting segment carries `deviceIds`
- * through, for coloring the aggregated timeline chart per device.
+ * Same midnight-splitting idea as `dailySegments`, but for sessions that
+ * carry extra attribution (e.g. `deviceIds` from `mergeSessionsWithDeviceIds`,
+ * or `workType` from `mergeClassifiedSessions`): every property besides
+ * `start`/`end` is carried through to each day's segment, for coloring the
+ * timeline chart.
  */
-export function dailySegmentsWithSource(
-  sessions: readonly AttributedSession[],
+export function dailySegmentsWithSource<T extends WorkSession>(
+  sessions: readonly T[],
   startKey: DateKey,
   endExclusiveKey: DateKey,
   timeZone: TimeZone,
-): AttributedDailySegments[] {
+): { date: DateKey; segments: (TimeSegment & Omit<T, "start" | "end">)[] }[] {
   const days = daysBetween(startKey, endExclusiveKey);
-  const result: AttributedDailySegments[] = days.map((date) => ({ date, segments: [] }));
+  const result: { date: DateKey; segments: (TimeSegment & Omit<T, "start" | "end">)[] }[] = days.map((date) => ({
+    date,
+    segments: [],
+  }));
   const indexByDate = new Map(result.map((r, i) => [r.date, i]));
 
   const rangeStartMs = startOfDayUtcMs(startKey, timeZone);
   const rangeEndMs = startOfDayUtcMs(endExclusiveKey, timeZone);
 
   for (const session of sessions) {
+    const { start: _start, end: _end, ...attribution } = session;
     forEachDaySlice(session, rangeStartMs, rangeEndMs, timeZone, (dayKey, sliceStart, sliceEnd, dayStart) => {
       const idx = indexByDate.get(dayKey);
       if (idx !== undefined) {
         result[idx]!.segments.push({
+          ...attribution,
           startMinutes: (sliceStart - dayStart) / 60_000,
           endMinutes: (sliceEnd - dayStart) / 60_000,
-          deviceIds: session.deviceIds,
         });
       }
     });

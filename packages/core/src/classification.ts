@@ -66,3 +66,64 @@ export function classifySlices(
     workType: classifyDay(piece.date, trackingModeAt(sortedHistory, piece.start, fallback)),
   }));
 }
+
+/** Whether time counted as work, leisure, or both at once (two devices classified differently). */
+export type WorkTypeCategory = WorkType | "mixed";
+
+/** One classified piece of one device's activity (see `classifySlices`). */
+export interface DeviceClassifiedPiece extends WorkSession {
+  workType: WorkType;
+  deviceId: string;
+}
+
+/** A merged interval of the all-devices timeline, attributed by work type rather than by device. */
+export interface WorkTypeSegment extends WorkSession {
+  workType: WorkTypeCategory;
+  /** Every device active at some point within the segment, sorted. */
+  deviceIds: string[];
+}
+
+/**
+ * Merges classified pieces across devices into one timeline whose intervals
+ * are attributed by work type: `"work"` or `"leisure"` where only that type
+ * was active, `"mixed"` where work and leisure overlapped (only possible
+ * with two devices active at once — a single device is one type at any
+ * instant). Like `mergeSessionsWithDeviceIds`, but sliced only where the
+ * active *category* changes, so a device handover within the same category
+ * doesn't fragment the timeline. The categories are disjoint, so their
+ * total duration equals the plain `mergeSessions` union of all pieces.
+ */
+export function mergeClassifiedSessions(pieces: readonly DeviceClassifiedPiece[]): WorkTypeSegment[] {
+  const valid = pieces.filter((p) => p.end > p.start);
+  if (valid.length === 0) return [];
+
+  const boundaries = [...new Set(valid.flatMap((p) => [p.start, p.end]))].sort((a, b) => a - b);
+  const byStart = [...valid].sort((a, b) => a.start - b.start);
+
+  const result: WorkTypeSegment[] = [];
+  let active: DeviceClassifiedPiece[] = [];
+  let next = 0;
+
+  for (let i = 0; i < boundaries.length - 1; i += 1) {
+    const segStart = boundaries[i]!;
+    const segEnd = boundaries[i + 1]!;
+    active = active.filter((p) => p.end > segStart);
+    while (next < byStart.length && byStart[next]!.start <= segStart) active.push(byStart[next++]!);
+    if (active.length === 0) continue; // a gap between sessions
+
+    const hasWork = active.some((p) => p.workType === "work");
+    const hasLeisure = active.some((p) => p.workType === "leisure");
+    const workType: WorkTypeCategory = hasWork && hasLeisure ? "mixed" : hasWork ? "work" : "leisure";
+    const deviceIds = active.map((p) => p.deviceId);
+
+    const last = result[result.length - 1];
+    if (last && last.end === segStart && last.workType === workType) {
+      last.end = segEnd;
+      last.deviceIds = [...new Set([...last.deviceIds, ...deviceIds])].sort();
+    } else {
+      result.push({ start: segStart, end: segEnd, workType, deviceIds: [...new Set(deviceIds)].sort() });
+    }
+  }
+
+  return result;
+}

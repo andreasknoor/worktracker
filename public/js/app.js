@@ -511,7 +511,7 @@
     if (isMonth) {
       const anchor = new Date(today.getFullYear(), today.getMonth() + state.monthOffset, 1);
       const monthData = await fetchMonth(anchor);
-      days = monthData.days.map(d => ({ date: parseIsoDate(d.date), hours: d.hours }));
+      days = monthData.days.map(toOverviewDay);
       rangeLabel = anchor.toLocaleDateString("en-US", { month: "long", year: "numeric" });
       document.getElementById("periodNext").disabled = state.monthOffset >= 0;
       compareAnchor = new Date(anchor.getFullYear(), anchor.getMonth() - 1, 1);
@@ -520,7 +520,7 @@
       const monday = new Date(baseMonday);
       monday.setDate(monday.getDate() + state.weekOffset * 7);
       const weekData = await fetchWeek(monday);
-      days = weekData.days.map(d => ({ date: parseIsoDate(d.date), hours: d.hours }));
+      days = weekData.days.map(toOverviewDay);
       const sunday = new Date(monday); sunday.setDate(sunday.getDate() + 6);
       rangeLabel = formatShortDate(monday) + " – " + formatShortDate(sunday);
       document.getElementById("periodNext").disabled = state.weekOffset >= 0;
@@ -534,8 +534,12 @@
     const periodTotalHours = days.reduce((sum, d) => sum + d.hours, 0);
     const activeDayCount = days.filter(d => d.hours > 0).length;
     const periodAvgHours = activeDayCount > 0 ? periodTotalHours / activeDayCount : 0;
+    const periodTypeHours = {};
+    WORK_TYPE_ORDER.forEach(t => { periodTypeHours[t + "Hours"] = days.reduce((sum, d) => sum + d[t + "Hours"], 0); });
+    const periodTypes = WORK_TYPE_ORDER.filter(t => periodTypeHours[t + "Hours"] > 0);
     document.getElementById("weeklySummaryLine").textContent =
-      "Total " + fmtHours(periodTotalHours) + " · Avg " + fmtHours(periodAvgHours) + "/day";
+      "Total " + fmtHours(periodTotalHours) + " · Avg " + fmtHours(periodAvgHours) + "/day" +
+      (periodTypes.length > 1 ? " · " + workTypeBreakdownLabel(periodTypeHours) : "");
 
     const compareLegend = document.getElementById("compareLegend");
     if (showTimeline) {
@@ -552,13 +556,15 @@
     let compareDays = null;
     if (compareOn) {
       const compareData = isMonth ? await fetchMonth(compareAnchor) : await fetchWeek(compareAnchor);
-      compareDays = compareData.days.map(d => ({ date: parseIsoDate(d.date), hours: d.hours }));
+      compareDays = compareData.days.map(toOverviewDay);
     }
+    // The current bars are colored by work type (keyed by the work-type
+    // legend); the ghost bars show the previous period's total only.
+    renderWorkTypeLegend(new Set(periodTypes));
     if (compareOn) {
       compareLegend.style.display = "";
       compareLegend.innerHTML =
-        '<span class="legend-item"><span class="swatch" style="background:var(--series-1)"></span>This ' + (isMonth ? "month" : "week") + '</span>' +
-        '<span class="legend-item"><span class="swatch" style="background:none;border:1.5px dashed var(--baseline);"></span>Previous ' + (isMonth ? "month" : "week") + '</span>';
+        '<span class="legend-item"><span class="swatch" style="background:none;border:1.5px dashed var(--baseline);"></span>Previous ' + (isMonth ? "month" : "week") + ' (total)</span>';
     } else {
       compareLegend.style.display = "none";
     }
@@ -579,7 +585,7 @@
     function yFor(h) { return padT + plotH - (h / maxHours) * plotH; }
 
     const svg = document.getElementById("weeklySvg");
-    const parts = [];
+    const parts = [mixedPatternDef("mixed-pattern-weekly")];
 
     const steps = [0, maxHours / 2, maxHours];
     steps.forEach(v => {
@@ -621,15 +627,35 @@
         parts.push('<rect class="bar-compare" x="' + gx.toFixed(1) + '" y="' + cy.toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + Math.max(ch, 1).toFixed(1) + '" rx="3"></rect>');
       }
 
+      // Stacked by work type, bottom → top: work, mixed, leisure. Parts are
+      // separated by a 2px gap; only the topmost part gets the rounded end.
       if (h > 0.5) {
-        parts.push(
-          '<path class="bar" data-idx="' + i + '" d="M' + x.toFixed(1) + ',' + (y + r).toFixed(1) +
-          ' a' + r + ',' + r + ' 0 0 1 ' + r + ',-' + r +
-          ' h' + (barW - 2 * r).toFixed(1) +
-          ' a' + r + ',' + r + ' 0 0 1 ' + r + ',' + r +
-          ' v' + (h - r).toFixed(1) +
-          ' h-' + barW.toFixed(1) + ' z"></path>'
-        );
+        const stack = WORK_TYPE_ORDER.filter(t => d[t + "Hours"] > 0);
+        let partBottom = baseY;
+        stack.forEach((t, pi) => {
+          const partH = (d[t + "Hours"] / maxHours) * plotH;
+          const partTop = partBottom - partH;
+          const drawBottom = partBottom - (pi > 0 ? 2 : 0);
+          const drawH = drawBottom - partTop;
+          const fill = workTypeFill(t, "mixed-pattern-weekly");
+          if (drawH > 0.5) {
+            if (pi === stack.length - 1) {
+              const pr = Math.min(4, drawH);
+              parts.push(
+                '<path class="bar-seg" data-idx="' + i + '" style="fill:' + fill + '" d="M' + x.toFixed(1) + ',' + (partTop + pr).toFixed(1) +
+                ' a' + pr + ',' + pr + ' 0 0 1 ' + pr + ',-' + pr +
+                ' h' + (barW - 2 * pr).toFixed(1) +
+                ' a' + pr + ',' + pr + ' 0 0 1 ' + pr + ',' + pr +
+                ' v' + (drawH - pr).toFixed(1) +
+                ' h-' + barW.toFixed(1) + ' z"></path>'
+              );
+            } else {
+              parts.push('<rect class="bar-seg" data-idx="' + i + '" style="fill:' + fill + '" x="' + x.toFixed(1) + '" y="' + partTop.toFixed(1) +
+                '" width="' + barW.toFixed(1) + '" height="' + drawH.toFixed(1) + '"></rect>');
+            }
+          }
+          partBottom = partTop;
+        });
       }
 
       // In month mode, only label every `labelEvery`-th day (same downsampling
@@ -668,16 +694,16 @@
         ? d.date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
         : formatWeekday(d.date) + ", " + formatShortDate(d.date);
       const cmp = compareOn && compareDays ? compareDays[idx] : null;
-      const value = (d.hours > 0 ? fmtHours(d.hours) : "No activity") +
+      const value = (d.hours > 0 ? fmtHours(d.hours) + " · " + workTypeBreakdownLabel(d) : "No activity") +
         (cmp ? " (previous: " + (cmp.hours > 0 ? fmtHours(cmp.hours) : "no activity") + ")" : "");
       showTooltip(svgRect.left + cx * scaleX, clientY, label, value);
-      svg.querySelectorAll(".bar").forEach(b => b.classList.remove("active"));
-      const bar = svg.querySelector('.bar[data-idx="' + idx + '"]');
-      if (bar) bar.classList.add("active");
+      svg.querySelectorAll(".bar-seg").forEach(b => b.classList.toggle("active", b.getAttribute("data-idx") === String(idx)));
+      svg.classList.add("bars-dimmed");
     }
     function hideBarTooltip() {
       hideTooltip();
-      svg.querySelectorAll(".bar").forEach(b => b.classList.remove("active"));
+      svg.classList.remove("bars-dimmed");
+      svg.querySelectorAll(".bar-seg").forEach(b => b.classList.remove("active"));
     }
 
     // pointermove/pointerleave cover hover; focus/blur (via the hit-col rects'
@@ -695,12 +721,14 @@
 
   function renderWeeklyTable(days) {
     const isMonth = state.periodMode === "month";
+    const cell = h => '<td class="num">' + (h > 0 ? fmtHours(h) : "—") + "</td>";
     const rows = days.map(d =>
       "<tr><td>" + (isMonth ? d.date.toLocaleDateString("en-US", { month: "short", day: "numeric", weekday: "short" }) : formatWeekday(d.date) + ", " + formatShortDate(d.date)) +
-      '</td><td class="num">' + (d.hours > 0 ? fmtHours(d.hours) : "—") + "</td></tr>"
+      "</td>" + WORK_TYPE_ORDER.map(t => cell(d[t + "Hours"])).join("") + cell(d.hours) + "</tr>"
     ).join("");
+    const typeHeaders = WORK_TYPE_ORDER.map(t => '<th class="num">' + WORK_TYPE_LABELS[t] + "</th>").join("");
     document.getElementById("weeklyTableWrap").innerHTML =
-      '<table class="data-table"><thead><tr><th>Day</th><th class="num">Hours</th></tr></thead><tbody>' + rows + "</tbody></table>";
+      '<table class="data-table"><thead><tr><th>Day</th>' + typeHeaders + '<th class="num">Total</th></tr></thead><tbody>' + rows + "</tbody></table>";
   }
 
   /* ---------- Weekly target & flex-time balance ---------- */
@@ -988,7 +1016,7 @@
     function yForMinute(minute) { return padT + ((minute - rangeStart) / rangeSpan) * plotH; }
 
     const svg = document.getElementById("timelineSvg");
-    const parts = [];
+    const parts = [mixedPatternDef("mixed-pattern-timeline")];
 
     // Core-hours band spans the full chart width, behind the day tracks, so the
     // configured core hours (e.g. 09:00–18:00) read as a highlighted reference zone.
@@ -1030,13 +1058,9 @@
         const segY = yForMinute(visStart);
         const segH = yForMinute(visEnd) - segY;
         if (segH <= 0) return;
-        // Per-segment fill by device (or the neutral overlap gray for
-        // simultaneous-device segments); .timeline-segment's CSS fill is only
-        // the default/fallback, overridden here. When a single device is
-        // already selected via the header filter, every segment trivially
-        // has one deviceId, so this resolves to that one color everywhere —
-        // visually identical to the old single-color rendering.
-        const fill = segmentFillColor(seg);
+        // Per-segment fill by work type (work / leisure / mixed stripes);
+        // .timeline-segment's CSS fill is only the fallback.
+        const fill = workTypeFill(seg.workType, "mixed-pattern-timeline");
         parts.push(
           '<rect class="timeline-segment" tabindex="0" data-day-idx="' + i + '" data-seg-idx="' + segIdx + '" x="' + x.toFixed(1) +
           '" y="' + segY.toFixed(1) + '" width="' + trackW.toFixed(1) + '" height="' + segH.toFixed(1) + '" style="fill:' + fill + '"></rect>'
@@ -1061,11 +1085,13 @@
       const cx = padL + slotW * dayIdx + slotW / 2;
       const durationLabel = fmtMinutes(seg.endMinutes - seg.startMinutes);
       const timeLabel = formatMinutesAsClock(seg.startMinutes) + "–" + formatMinutesAsClock(seg.endMinutes);
-      // Device name(s) are the accessibility-primary channel for device
-      // coloring — the color is a shortcut layered on top of this text, not
-      // the only signal, so it's included here even though a color is also shown.
-      const deviceLabel = segmentDeviceLabel(seg);
-      const valueLabel = timeLabel + " (" + durationLabel + ")" + (deviceLabel ? " · " + deviceLabel : "");
+      // The work type in text is the accessibility-primary channel — the color
+      // is a shortcut layered on top of it. Device name(s) are secondary
+      // context (e.g. why a period is "Mixed").
+      const typeLabel = WORK_TYPE_LABELS[seg.workType] || "";
+      const deviceLabel = (seg.deviceIds || []).map(deviceNameById).join(" + ");
+      const valueLabel = timeLabel + " (" + durationLabel + ")" + (typeLabel ? " · " + typeLabel : "") +
+        (deviceLabel ? " · " + deviceLabel : "");
       showTooltip(svgRect.left + cx * scaleX, clientY,
         formatWeekday(d.date) + ", " + formatShortDate(d.date), valueLabel);
       rect.classList.add("active");
@@ -1086,64 +1112,16 @@
       rect.addEventListener("blur", () => hideSegmentTooltip(rect));
     });
 
-    renderTimelineLegend(days);
+    renderWorkTypeLegend(new Set(days.flatMap(d => d.segments.map(seg => seg.workType))));
     renderTimelineTable(days);
-  }
-
-  // Shown above the Timeline chart only in the aggregated ("All devices")
-  // view — a specific device selection already has just one color, so
-  // there's nothing to key. Only devices that actually appear in the
-  // current week's segments get a swatch (not every device on the account),
-  // plus an "Overlap" swatch whenever any segment has 2+ deviceIds.
-  function renderTimelineLegend(days) {
-    const legendEl = document.getElementById("timelineLegend");
-
-    const seenDeviceIds = new Set();
-    let hasOverlap = false;
-    if (state.selectedDeviceId === "") {
-      days.forEach(d => d.segments.forEach(seg => {
-        if (!seg.deviceIds || seg.deviceIds.length === 0) return;
-        if (seg.deviceIds.length >= 2) hasOverlap = true;
-        else seenDeviceIds.add(seg.deviceIds[0]);
-      }));
-    }
-
-    if (seenDeviceIds.size === 0 && !hasOverlap) {
-      legendEl.style.display = "none";
-      legendEl.innerHTML = "";
-      return;
-    }
-
-    legendEl.innerHTML = "";
-    devicesCache.forEach((device, idx) => {
-      if (!seenDeviceIds.has(device.id)) return;
-      const item = document.createElement("div");
-      item.className = "legend-item";
-      const swatch = document.createElement("span");
-      swatch.className = "swatch";
-      swatch.style.background = colorForDeviceIndex(idx);
-      item.appendChild(swatch);
-      item.appendChild(document.createTextNode(device.name));
-      legendEl.appendChild(item);
-    });
-    if (hasOverlap) {
-      const item = document.createElement("div");
-      item.className = "legend-item";
-      const swatch = document.createElement("span");
-      swatch.className = "swatch";
-      swatch.style.background = "var(--overlap)";
-      item.appendChild(swatch);
-      item.appendChild(document.createTextNode("Overlap"));
-      legendEl.appendChild(item);
-    }
-    legendEl.style.display = "flex";
   }
 
   function renderTimelineTable(days) {
     const showDeviceColumn = state.selectedDeviceId === "";
     const rows = days.map(d => {
       const segmentsLabel = d.segments.length
-        ? d.segments.map(s => formatMinutesAsClock(s.startMinutes) + "–" + formatMinutesAsClock(s.endMinutes)).join(", ")
+        ? d.segments.map(s => formatMinutesAsClock(s.startMinutes) + "–" + formatMinutesAsClock(s.endMinutes) +
+            (WORK_TYPE_LABELS[s.workType] ? " (" + WORK_TYPE_LABELS[s.workType] + ")" : "")).join(", ")
         : "—";
       const deviceCell = showDeviceColumn
         ? "<td>" + (d.segments.length ? d.segments.map(s => escapeHtml(segmentDeviceLabel(s))).join(", ") : "—") + "</td>"
@@ -1611,20 +1589,59 @@
     return devices;
   }
 
-  // Category color for a device's position in devicesCache (creation order):
-  // index 0 -> --series-1, ... index 7 -> --series-8. A 9th+ device, or a
-  // device id no longer present in devicesCache, falls back to the neutral
-  // --overlap gray — a deliberate, documented fallback (not expected for a
-  // personal-use tool), not a bug.
-  function colorForDeviceIndex(index) {
-    if (index >= 0 && index < 8) return "var(--series-" + (index + 1) + ")";
-    return "var(--overlap)";
+  // The overview chart (Totals and Timeline) is colored by work / leisure
+  // classification, not by device — which device tracked the time is only
+  // shown as text (tooltips, tables). "mixed" = work and leisure at the same
+  // time on two devices; it's drawn as stripes of both colors (an SVG
+  // <pattern> per chart, see mixedPatternDef) rather than a third hue.
+  const WORK_TYPE_LABELS = { work: "Work", mixed: "Mixed", leisure: "Leisure" };
+  const WORK_TYPE_ORDER = ["work", "mixed", "leisure"]; // stack order, bottom → top
+
+  function mixedPatternDef(id) {
+    return '<defs><pattern id="' + id + '" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">' +
+      '<rect width="3" height="6" style="fill:var(--work)"></rect>' +
+      '<rect x="3" width="3" height="6" style="fill:var(--leisure)"></rect></pattern></defs>';
   }
 
-  function segmentFillColor(seg) {
-    if (!seg.deviceIds || seg.deviceIds.length !== 1) return "var(--overlap)";
-    const index = devicesCache.findIndex(d => d.id === seg.deviceIds[0]);
-    return colorForDeviceIndex(index);
+  function workTypeFill(workType, mixedPatternId) {
+    if (workType === "leisure") return "var(--leisure)";
+    if (workType === "mixed") return "url(#" + mixedPatternId + ")";
+    return "var(--work)";
+  }
+
+  // Legend above the overview chart: one swatch per work type that actually
+  // occurs in the shown period, so a work-only week shows just "Work".
+  function renderWorkTypeLegend(presentTypes) {
+    const legendEl = document.getElementById("workTypeLegend");
+    const types = WORK_TYPE_ORDER.filter(t => presentTypes.has(t));
+    if (types.length === 0) {
+      legendEl.style.display = "none";
+      legendEl.innerHTML = "";
+      return;
+    }
+    legendEl.innerHTML = types.map(t =>
+      '<span class="legend-item"><span class="swatch swatch-' + t + '"></span>' + WORK_TYPE_LABELS[t] + "</span>"
+    ).join("");
+    legendEl.style.display = "flex";
+  }
+
+  // A /week or /month day, with the per-type split. Servers before v1.26 only
+  // sent `hours`; count that as work so the chart still renders.
+  function toOverviewDay(d) {
+    const hasBreakdown = typeof d.workHours === "number";
+    return {
+      date: parseIsoDate(d.date),
+      hours: d.hours,
+      workHours: hasBreakdown ? d.workHours : d.hours,
+      mixedHours: hasBreakdown ? d.mixedHours : 0,
+      leisureHours: hasBreakdown ? d.leisureHours : 0,
+    };
+  }
+
+  function workTypeBreakdownLabel(d) {
+    const present = WORK_TYPE_ORDER.filter(t => d[t + "Hours"] > 0);
+    if (present.length === 1) return WORK_TYPE_LABELS[present[0]];
+    return present.map(t => WORK_TYPE_LABELS[t] + " " + fmtHours(d[t + "Hours"])).join(" · ");
   }
 
   function deviceNameById(id) {

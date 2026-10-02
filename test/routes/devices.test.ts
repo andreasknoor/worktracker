@@ -963,8 +963,8 @@ describe("Work/leisure classification (?workType=work|leisure|all)", () => {
   });
 });
 
-describe("week-timeline device attribution (deviceIds)", () => {
-  it("attributes a solo segment to one device and an overlapping segment to both", async () => {
+describe("week-timeline attribution (workType, with deviceIds for tooltips)", () => {
+  it("merges two devices of the same work type into one segment listing both devices", async () => {
     const ctx = await setUp();
     const monday = Date.UTC(2026, 2, 9); // a Monday
 
@@ -1003,11 +1003,11 @@ describe("week-timeline device attribution (deviceIds)", () => {
     const response = await authed(ctx, "/api/stats/week-timeline?start=2026-03-09");
     const timeline = await response.json();
 
+    // Both devices are on "auto", so Monday is work for both: no device
+    // slicing anymore — one work segment, 09:00–10:00, naming both devices.
     const mondaySegments = timeline.days.find((d: { date: string }) => d.date === "2026-03-09").segments;
-    expect(mondaySegments.map((s: { deviceIds: string[] }) => s.deviceIds.slice().sort())).toEqual([
-      [deviceA.id],
-      [deviceA.id, deviceB.id].sort(),
-      [deviceB.id],
+    expect(mondaySegments).toEqual([
+      { startMinutes: 540, endMinutes: 600, workType: "work", deviceIds: [deviceA.id, deviceB.id].sort() },
     ]);
   });
 
@@ -1036,6 +1036,7 @@ describe("week-timeline device attribution (deviceIds)", () => {
 
     expect(mondaySegments).toHaveLength(1);
     expect(mondaySegments[0].deviceIds).toEqual([deviceA.id]);
+    expect(mondaySegments[0].workType).toBe("work");
   });
 });
 
@@ -1292,7 +1293,7 @@ describe("Tracking-mode history (classification by the mode in effect at the tim
 
     const timeline = await (await authed(ctx, "/api/stats/week-timeline?start=2026-03-09&workType=leisure")).json();
     const segments = timeline.days.find((d: { date: string }) => d.date === "2026-03-09").segments;
-    expect(segments).toEqual([{ startMinutes: 12 * 60, endMinutes: 14 * 60, deviceIds: [laptop.id] }]);
+    expect(segments).toEqual([{ startMinutes: 12 * 60, endMinutes: 14 * 60, workType: "leisure", deviceIds: [laptop.id] }]);
   });
 
   it("drops a permanently deleted device's history: its orphaned events fall back to auto", async () => {
@@ -1306,5 +1307,110 @@ describe("Tracking-mode history (classification by the mode in effect at the tim
 
     expect(await hoursOn(ctx, "2026-03-14", "work")).toBe(0);
     expect(await hoursOn(ctx, "2026-03-14", "leisure")).toBeCloseTo(1, 5);
+  });
+});
+
+describe("Work / leisure / mixed breakdown (overview endpoints)", () => {
+  // 2026-03-09 is a Monday, 2026-03-14 a Saturday.
+  const monday = Date.UTC(2026, 2, 9);
+  const saturday = Date.UTC(2026, 2, 14);
+  const HOUR = 60 * MINUTE;
+
+  async function device(ctx: TestContext, name: string, trackingMode?: string) {
+    const created = await (
+      await authed(ctx, "/api/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, platform: "mac" }),
+      })
+    ).json();
+    if (trackingMode) {
+      await authed(ctx, `/api/devices/${created.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trackingMode }),
+      });
+    }
+    return created as { id: string; apiKey: string };
+  }
+
+  /** Activity every 10 minutes; the extra event at +30 s confirms a resumption after an idle gap. */
+  async function activity(ctx: TestContext, apiKey: string, fromMs: number, toMs: number) {
+    const timestamps: string[] = [new Date(fromMs + 30_000).toISOString()];
+    for (let t = fromMs; t <= toMs; t += 10 * MINUTE) timestamps.push(new Date(t).toISOString());
+    await ctx.app.request("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ timestamps }),
+    });
+  }
+
+  /**
+   * Saturday: Company PC (alwaysWork) 10:00–12:00, Laptop (auto → leisure) 11:00–13:00.
+   * → work 10–11, mixed 11–12, leisure 12–13. Monday: Laptop 09:00–10:00 (work).
+   */
+  async function fixture() {
+    const ctx = await setUp();
+    ctx.clock.nowMs = Date.UTC(2026, 2, 1);
+    const pc = await device(ctx, "Company PC", "alwaysWork");
+    const laptop = await device(ctx, "Laptop");
+    await activity(ctx, pc.apiKey, saturday + 10 * HOUR, saturday + 12 * HOUR);
+    await activity(ctx, laptop.apiKey, saturday + 11 * HOUR, saturday + 13 * HOUR);
+    await activity(ctx, laptop.apiKey, monday + 9 * HOUR, monday + 10 * HOUR);
+    return { ctx, pc, laptop };
+  }
+
+  async function weekDay(ctx: TestContext, date: string, query = "") {
+    const week = await (await authed(ctx, `/api/stats/week?start=2026-03-09${query}`)).json();
+    return week.days.find((d: { date: string }) => d.date === date);
+  }
+
+  it("splits each day into disjoint work, leisure and mixed hours that add up to the total", async () => {
+    const { ctx } = await fixture();
+    const sat = await weekDay(ctx, "2026-03-14");
+    expect(sat.hours).toBeCloseTo(3, 5);
+    expect(sat.workHours).toBeCloseTo(1, 5);
+    expect(sat.mixedHours).toBeCloseTo(1, 5);
+    expect(sat.leisureHours).toBeCloseTo(1, 5);
+
+    const mon = await weekDay(ctx, "2026-03-09");
+    expect(mon).toMatchObject({ workHours: 1, leisureHours: 0, mixedHours: 0 });
+  });
+
+  it("under ?workType=work counts mixed time as work, so nothing is mixed", async () => {
+    const { ctx } = await fixture();
+    const sat = await weekDay(ctx, "2026-03-14", "&workType=work");
+    expect(sat.hours).toBeCloseTo(2, 5);
+    expect(sat.workHours).toBeCloseTo(2, 5);
+    expect(sat.mixedHours).toBe(0);
+    expect(sat.leisureHours).toBe(0);
+  });
+
+  it("zeroes the breakdown of days excluded by ?dayType=", async () => {
+    const { ctx } = await fixture();
+    const sat = await weekDay(ctx, "2026-03-14", "&dayType=weekday");
+    expect(sat).toMatchObject({ hours: 0, workHours: 0, leisureHours: 0, mixedHours: 0 });
+  });
+
+  it("returns the same breakdown from /month and /weeks", async () => {
+    const { ctx } = await fixture();
+    const month = await (await authed(ctx, "/api/stats/month?month=2026-03-01")).json();
+    const weeks = await (await authed(ctx, "/api/stats/weeks?start=2026-03-09&count=1")).json();
+    const week = await (await authed(ctx, "/api/stats/week?start=2026-03-09")).json();
+    expect(weeks.weeks[0].days).toEqual(week.days);
+    expect(month.days.find((d: { date: string }) => d.date === "2026-03-14")).toEqual(
+      week.days.find((d: { date: string }) => d.date === "2026-03-14"),
+    );
+  });
+
+  it("colors the week timeline by work type, with a mixed segment where they overlap", async () => {
+    const { ctx, pc, laptop } = await fixture();
+    const timeline = await (await authed(ctx, "/api/stats/week-timeline?start=2026-03-09")).json();
+    const segments = timeline.days.find((d: { date: string }) => d.date === "2026-03-14").segments;
+    expect(segments).toEqual([
+      { startMinutes: 600, endMinutes: 660, workType: "work", deviceIds: [pc.id] },
+      { startMinutes: 660, endMinutes: 720, workType: "mixed", deviceIds: [pc.id, laptop.id].sort() },
+      { startMinutes: 720, endMinutes: 780, workType: "leisure", deviceIds: [laptop.id] },
+    ]);
   });
 });

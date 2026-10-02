@@ -12,16 +12,22 @@ All dates are `"yyyy-MM-dd"` strings; all times within a day are `"HH:mm"` 24h s
 {
   "weekStart": "2026-03-09",
   "weekEndExclusive": "2026-03-16",
-  "days": [{ "date": "2026-03-09", "hours": 7.5 }, ...]
+  "days": [{ "date": "2026-03-09", "hours": 7.5, "workHours": 6, "mixedHours": 0.5, "leisureHours": 1 }, ...]
 }
 ```
+`workHours` / `mixedHours` / `leisureHours` split `hours` by work type (see
+"Work/leisure attribution" below). They're disjoint and add up to `hours`.
+`mixedHours` is time when work and leisure overlapped on two devices. Under
+`?workType=work|leisure` everything falls into that one type and the other two
+are `0`. Days excluded by `?dayType=` are zeroed in all four fields. The same
+fields appear in `/weeks` and `/month`. Servers before v1.26 sent only `hours`.
 
 ### `GET /api/stats/weeks?start=yyyy-MM-dd&count=n`
 Batched form of `/api/stats/week`: returns `count` (1-52) consecutive weeks starting at `start` in one response, computing the combined range once server-side instead of once per week. Added for the dashboard's target-balance chart, which otherwise needed `balanceWindowWeeks + 1` separate `/api/stats/week` calls on every refresh — see `docs/IMPLEMENTATION_NOTES.md` ("Dashboard polling exceeded Neon's free-tier network transfer allowance"). `count` defaults to `1` if omitted.
 ```json
 {
   "weeks": [
-    { "weekStart": "2026-02-23", "weekEndExclusive": "2026-03-02", "days": [{ "date": "2026-02-23", "hours": 7.5 }, ...] },
+    { "weekStart": "2026-02-23", "weekEndExclusive": "2026-03-02", "days": [{ "date": "2026-02-23", "hours": 7.5, "workHours": 7.5, "mixedHours": 0, "leisureHours": 0 }, ...] },
     { "weekStart": "2026-03-02", "weekEndExclusive": "2026-03-09", "days": [...] },
     ...
   ]
@@ -29,7 +35,7 @@ Batched form of `/api/stats/week`: returns `count` (1-52) consecutive weeks star
 ```
 
 ### `GET /api/stats/week-timeline?start=yyyy-MM-dd`
-Same week window, but per-day clock-time segments instead of totals (for the "Timeline" chart mode). Each segment additionally carries `deviceIds`: the device(s) active during that exact sub-slice — one id if only one device was active, two or more if they overlapped (used to color the aggregated Timeline chart per device, with a neutral color for the multi-device case; see "Device attribution" below).
+Same week window, but per-day clock-time segments instead of totals (for the "Timeline" chart mode). Each segment carries `workType`: `"work"`, `"leisure"`, or `"mixed"` (work and leisure overlapping on two devices), which the Timeline chart is colored by. It also carries `deviceIds`: every device active somewhere within the segment, for tooltips only. Segments are cut only where the work type changes, not at device handovers. See "Work/leisure attribution" below.
 ```json
 {
   "weekStart": "2026-03-09",
@@ -38,9 +44,9 @@ Same week window, but per-day clock-time segments instead of totals (for the "Ti
     {
       "date": "2026-03-09",
       "segments": [
-        { "startMinutes": 540, "endMinutes": 690, "deviceIds": ["a1b2..."] },
-        { "startMinutes": 690, "endMinutes": 720, "deviceIds": ["a1b2...", "c3d4..."] },
-        { "startMinutes": 780, "endMinutes": 1020, "deviceIds": ["c3d4..."] }
+        { "startMinutes": 540, "endMinutes": 690, "workType": "work", "deviceIds": ["a1b2..."] },
+        { "startMinutes": 690, "endMinutes": 720, "workType": "mixed", "deviceIds": ["a1b2...", "c3d4..."] },
+        { "startMinutes": 780, "endMinutes": 1020, "workType": "leisure", "deviceIds": ["c3d4..."] }
       ]
     },
     ...
@@ -54,7 +60,7 @@ Any date within the target month; only year/month are used. Returns all days of 
 {
   "monthStart": "2026-02-01",
   "monthEndExclusive": "2026-03-01",
-  "days": [{ "date": "2026-02-01", "hours": 0 }, ...]
+  "days": [{ "date": "2026-02-01", "hours": 0, "workHours": 0, "mixedHours": 0, "leisureHours": 0 }, ...]
 }
 ```
 
@@ -275,26 +281,32 @@ activity. `summary`'s `longestSessionMinutes` is scoped to sessions whose
 *start* falls in the filtered classification. `live` and `first-activity`
 don't accept this param, same rationale as `dayType`.
 
-## Device attribution (Timeline chart & live session, dimension 1)
+## Work/leisure attribution (overview chart) and device attribution (live session)
 
-`GET /api/stats/week-timeline`'s `deviceIds` field (see above) lets the
-dashboard color the aggregated Timeline chart per device, with a neutral
-color wherever `deviceIds.length >= 2` (devices genuinely active at the same
-instant — sliced at the exact overlap boundary, not the whole span each
-session happened to touch). This is independent of `workType`: it's an
-identity axis (whose activity is this), not a classification axis (what kind
-of time is this) — mixing the two into one color channel was considered and
-deliberately rejected, since a device left on `auto` would need its color to
-mean two different things at once. If `?workType=` is also passed, the
-attributed sessions are computed *within* that classification bucket first,
-so the Timeline chart's device colors reflect only the currently filtered
-work/leisure slice.
+Since v1.26 the overview chart (Totals and Timeline) is colored by **work
+type**, not by device. Which device tracked the time no longer matters there;
+device names only appear as text in tooltips and tables. Each device's
+activity is classified first (by its own tracking-mode history, see
+"Work/leisure filtering"). The pieces are then merged across devices into
+disjoint `work` / `leisure` / `mixed` intervals (`mergeClassifiedSessions` in
+`packages/core`). `mixed` only arises when two devices classified differently
+are active at the same instant, because a single device is one type at any
+moment. The categories add up to the plain all-devices total. If `?workType=`
+is passed, only that type's pieces are merged, so no `mixed` can appear and
+the numbers match the `?workType=` totals elsewhere. In the unfiltered view,
+the work share of a stacked bar is therefore smaller than the `?workType=work`
+total by exactly the mixed time, which the filtered view counts toward both
+types.
 
-`GET /api/stats/live`'s `activeDeviceIds` (see above) reuses this same
-mechanism — `getAttributedSessionsInRange` — applied to the live range
-instead of a historical week, reading `deviceIds` off the last (currently
-still-running) interval. Named devices in the "Current session" hint, not a
-color, since the live tile isn't a chart.
+Before v1.26 the Timeline was colored per device, with gray for overlaps.
+Mixing identity and classification into one color channel had been rejected
+back then. This is a replacement, not a mix: the user decided device identity
+doesn't matter in this chart.
+
+`GET /api/stats/live`'s `activeDeviceIds` and `/api/stats/sessions`'
+`deviceIds` still use per-device attribution (`getAttributedSessionsInRange` /
+`mergeSessionsWithDeviceIds`, sliced at the exact instant the active device
+set changes). They show named devices as text, not colors.
 
 ## Resolved during implementation
 

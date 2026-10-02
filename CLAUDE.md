@@ -139,20 +139,18 @@ tray shell) has never been run outside Windows — see
 - Sessions spanning midnight in `/api/stats/sessions` are split into one row
   per day touched (reusing the timeline chart's `dailySegments` clipping
   logic); a session ending exactly at midnight formats as `"24:00"`.
-- **Two independent filter/coloring dimensions on top of the merged
-  timeline**, both in `src/server/services/sessionsService.ts` +
-  `packages/core`: **device identity** (`getAttributedSessionsInRange` /
-  `mergeSessionsWithDeviceIds`, dimension 1 — colors the Timeline chart per
-  device, sliced at the exact instant the active device set changes, not the
-  whole span a session happened to touch) and **work/leisure classification**
-  (`getClassifiedSessionsInRange` / `classifySlices`, dimension 2 — each
-  device's tracking mode, default `"auto"`, overrides the
-  weekday=work/weekend=leisure default per device). They're deliberately kept
-  orthogonal rather than merged into one color channel — see
-  `docs/API_CONTRACT.md`'s "Device attribution" section for why. Classifying
-  happens *before* merging (`splitByDay`, then `classifySlices` per device)
-  since a device left on `auto` can contribute both work and leisure time
-  within the same query range.
+- **Two attribution dimensions on top of the merged timeline**, both in
+  `src/server/services/sessionsService.ts` + `packages/core`:
+  **work/leisure classification** (`classifySlices`, then
+  `getWorkTypeSegmentsInRange` / `mergeClassifiedSessions` → `work` /
+  `leisure` / `mixed`) colors the overview chart (Totals stacked bars and
+  Timeline, since v1.26) and feeds `?workType=`. **Device identity**
+  (`getAttributedSessionsInRange` / `mergeSessionsWithDeviceIds`) is now text
+  only: live "active on …" and the session log. Classifying happens *before*
+  merging (`splitByDay`, then `classifySlices` per device), since a device
+  left on `auto` can contribute both work and leisure time within the same
+  query range. `mixed` only exists where two differently classified devices
+  overlap. See `docs/API_CONTRACT.md`'s "Work/leisure attribution".
 - **Classification uses the mode in effect at the time, not the current
   one.** `devices.tracking_mode` is only the current value; every change is
   also appended to `device_tracking_mode_history` with the server's receive

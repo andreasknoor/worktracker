@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { classifySlices, splitAtInstants, trackingModeAt } from "../src/classification.js";
+import { classifySlices, mergeClassifiedSessions, splitAtInstants, trackingModeAt } from "../src/classification.js";
+import { mergeSessions } from "../src/sessionCalculator.js";
 import { splitByDay } from "../src/statistics.js";
 import { classifyDay } from "../src/time.js";
 import type { TrackingModeChange, WorkSession } from "../src/types.js";
@@ -144,5 +145,53 @@ describe("classifySlices", () => {
       // auto on a Sunday is leisure, too
       { date: "2026-03-29", start: sundayLocalMidnight + 2 * HOUR, end: sundayLocalMidnight + 4 * HOUR, workType: "leisure" },
     ]);
+  });
+});
+
+describe("mergeClassifiedSessions", () => {
+  const piece = (deviceId: string, start: number, end: number, workType: "work" | "leisure") => ({ deviceId, start, end, workType });
+
+  it("returns nothing for no pieces", () => {
+    expect(mergeClassifiedSessions([])).toEqual([]);
+  });
+
+  it("never yields mixed for a single device, even when it switches", () => {
+    const result = mergeClassifiedSessions([piece("a", 0, 10, "work"), piece("a", 10, 20, "leisure")]);
+    expect(result).toEqual([
+      { start: 0, end: 10, workType: "work", deviceIds: ["a"] },
+      { start: 10, end: 20, workType: "leisure", deviceIds: ["a"] },
+    ]);
+  });
+
+  it("marks only the simultaneous part of a work and a leisure device as mixed", () => {
+    const result = mergeClassifiedSessions([piece("pc", 0, 20, "work"), piece("mac", 10, 30, "leisure")]);
+    expect(result).toEqual([
+      { start: 0, end: 10, workType: "work", deviceIds: ["pc"] },
+      { start: 10, end: 20, workType: "mixed", deviceIds: ["mac", "pc"] },
+      { start: 20, end: 30, workType: "leisure", deviceIds: ["mac"] },
+    ]);
+  });
+
+  it("does not slice at a device handover within the same type", () => {
+    const result = mergeClassifiedSessions([piece("a", 0, 10, "work"), piece("b", 5, 20, "work"), piece("a", 20, 25, "work")]);
+    expect(result).toEqual([{ start: 0, end: 25, workType: "work", deviceIds: ["a", "b"] }]);
+  });
+
+  it("keeps gaps between sessions", () => {
+    const result = mergeClassifiedSessions([piece("a", 0, 10, "work"), piece("a", 15, 20, "work")]);
+    expect(result.map(({ start, end }) => [start, end])).toEqual([[0, 10], [15, 20]]);
+  });
+
+  it("adds up to the plain merged total (categories are disjoint)", () => {
+    const pieces = [
+      piece("a", 0, 40, "work"),
+      piece("b", 30, 70, "leisure"),
+      piece("c", 60, 90, "work"),
+      piece("a", 100, 120, "leisure"),
+      piece("b", 110, 115, "leisure"),
+    ];
+    const segmentsTotal = mergeClassifiedSessions(pieces).reduce((sum, s) => sum + (s.end - s.start), 0);
+    const mergedTotal = mergeSessions([pieces]).reduce((sum, s) => sum + (s.end - s.start), 0);
+    expect(segmentsTotal).toBe(mergedTotal);
   });
 });

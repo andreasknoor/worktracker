@@ -3,6 +3,7 @@ import {
   calculateSessions,
   classifySlices,
   effectiveResumeConfirmationWindow,
+  mergeClassifiedSessions,
   mergeSessions,
   mergeSessionsWithDeviceIds,
   splitByDay,
@@ -12,6 +13,7 @@ import {
   type TrackingModeChange,
   type WorkSession,
   type WorkType,
+  type WorkTypeSegment,
 } from "@worktracker/core";
 import type { ActivityEventsRepository, DevicesRepository, DeviceWithModeHistory } from "../repositories/types.js";
 
@@ -186,4 +188,33 @@ export async function getClassifiedSessionsInRange(
     workType,
   );
   return mergeSessions(perDevice.map((d) => d.sessions));
+}
+
+/**
+ * The unified timeline attributed by work type instead of by device: each
+ * device's activity is classified (`classifySlices`, using its own
+ * tracking-mode history) and then merged across devices into `"work"`,
+ * `"leisure"` and `"mixed"` intervals (`mergeClassifiedSessions`). Which
+ * device contributed is deliberately secondary — it's kept only as
+ * `deviceIds` for tooltips. Pass `workType` to keep only that type's pieces
+ * before merging (no `"mixed"` can result then, matching the `?workType=`
+ * totals); `"all"` keeps everything. The categories are disjoint, so their
+ * durations add up to the merged all-devices total.
+ */
+export async function getWorkTypeSegmentsInRange(
+  devicesRepo: DevicesRepository,
+  eventsRepo: ActivityEventsRepository,
+  startMs: number,
+  endExclusiveMs: number,
+  timeZone: TimeZone,
+  workType: WorkType | "all" = "all",
+  deviceId?: string,
+): Promise<WorkTypeSegment[]> {
+  const perDevice = await getPerDeviceSessions(devicesRepo, eventsRepo, startMs, endExclusiveMs, deviceId, true);
+  const pieces = perDevice.flatMap(({ deviceId: id, trackingMode, modeHistory, sessions }) =>
+    classifySlices(splitByDay(sessions, timeZone), modeHistory, trackingMode)
+      .filter((slice) => workType === "all" || slice.workType === workType)
+      .map((slice) => ({ start: slice.start, end: slice.end, workType: slice.workType, deviceId: id })),
+  );
+  return mergeClassifiedSessions(pieces);
 }

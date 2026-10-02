@@ -20,6 +20,7 @@ import {
   type TrackingMode,
   type WorkSession,
   type WorkType,
+  type WorkTypeSegment,
 } from "@worktracker/core";
 import {
   DASHBOARD_SESSION_COOKIE,
@@ -35,6 +36,7 @@ import {
   getAttributedSessionsInRange,
   getClassifiedSessionsInRange,
   getMergedSessionsInRange,
+  getWorkTypeSegmentsInRange,
 } from "./services/sessionsService.js";
 
 declare module "hono" {
@@ -125,6 +127,34 @@ function filterSessionsByDayType(sessions: readonly WorkSession[], dayType: DayT
   return sessions.filter((s) => matchesDayType(dateKeyInZone(s.start, timeZone), dayType));
 }
 
+/**
+ * Per-day hours split into work / leisure / mixed (see
+ * `getWorkTypeSegmentsInRange`) alongside the total, for the dashboard's
+ * stacked overview bars. The three parts are disjoint and add up to
+ * `hours`. Days outside `dayType` are zeroed like `filterDailyHours` does.
+ */
+function dailyWorkTypeBreakdown(
+  segments: readonly WorkTypeSegment[],
+  start: DateKey,
+  endExclusive: DateKey,
+  timeZone: string,
+  dayType: DayType,
+) {
+  const hoursOf = (s: readonly WorkSession[]) =>
+    filterDailyHours(dailyHours(s, start, endExclusive, timeZone), dayType).map((d) => d.workedTimeMs / 3_600_000);
+  const total = filterDailyHours(dailyHours(segments, start, endExclusive, timeZone), dayType);
+  const work = hoursOf(segments.filter((s) => s.workType === "work"));
+  const leisure = hoursOf(segments.filter((s) => s.workType === "leisure"));
+  const mixed = hoursOf(segments.filter((s) => s.workType === "mixed"));
+  return total.map((d, i) => ({
+    date: d.date,
+    hours: d.workedTimeMs / 3_600_000,
+    workHours: work[i] ?? 0,
+    leisureHours: leisure[i] ?? 0,
+    mixedHours: mixed[i] ?? 0,
+  }));
+}
+
 // ---------- Work-type filtering (?workType=work|leisure|all) ----------
 //
 // A second, independent filter dimension from `?dayType=` above: classifies
@@ -145,9 +175,9 @@ function parseWorkType(c: Context): WorkType | "all" | Response {
 
 /**
  * Fetches sessions for a stats endpoint, applying the `?workType=` filter
- * when active. Kept separate from `getAttributedSessionsInRange` (used only
- * by `/api/stats/week-timeline`, which additionally needs per-device
- * attribution for the Timeline chart's device coloring).
+ * when active. The overview endpoints (`week`, `weeks`, `month`,
+ * `week-timeline`) use `getWorkTypeSegmentsInRange` instead, which also
+ * attributes each interval to work / leisure / mixed.
  */
 async function getSessionsForRequest(
   deps: AppDependencies,
@@ -330,20 +360,20 @@ export function createApp(deps: AppDependencies): Hono {
     }
     const endExclusive = addDays(start, 7);
 
-    const sessions = await getSessionsForRequest(
-      deps,
+    const segments = await getWorkTypeSegmentsInRange(
+      deps.devices,
+      deps.events,
       Date.parse(start + "T00:00:00Z"),
       Date.parse(endExclusive + "T00:00:00Z"),
       timeZone,
       workType,
       deviceId,
     );
-    const daily = filterDailyHours(dailyHours(sessions, start, endExclusive, timeZone), dayType);
 
     return c.json({
       weekStart: start,
       weekEndExclusive: endExclusive,
-      days: daily.map((d) => ({ date: d.date, hours: d.workedTimeMs / 3_600_000 })),
+      days: dailyWorkTypeBreakdown(segments, start, endExclusive, timeZone, dayType),
     });
   });
 
@@ -377,15 +407,16 @@ export function createApp(deps: AppDependencies): Hono {
     }
     const endExclusive = addDays(start, count * 7);
 
-    const sessions = await getSessionsForRequest(
-      deps,
+    const segments = await getWorkTypeSegmentsInRange(
+      deps.devices,
+      deps.events,
       Date.parse(start + "T00:00:00Z"),
       Date.parse(endExclusive + "T00:00:00Z"),
       timeZone,
       workType,
       deviceId,
     );
-    const daily = filterDailyHours(dailyHours(sessions, start, endExclusive, timeZone), dayType);
+    const daily = dailyWorkTypeBreakdown(segments, start, endExclusive, timeZone, dayType);
 
     const weeks = [];
     for (let w = 0; w < count; w++) {
@@ -394,7 +425,7 @@ export function createApp(deps: AppDependencies): Hono {
       weeks.push({
         weekStart,
         weekEndExclusive,
-        days: daily.slice(w * 7, w * 7 + 7).map((d) => ({ date: d.date, hours: d.workedTimeMs / 3_600_000 })),
+        days: daily.slice(w * 7, w * 7 + 7),
       });
     }
 
@@ -415,7 +446,10 @@ export function createApp(deps: AppDependencies): Hono {
     }
     const endExclusive = addDays(start, 7);
 
-    const sessions = await getAttributedSessionsInRange(
+    // Attributed by work type (work / leisure / mixed), not by device — the
+    // Timeline view colors by classification; device ids ride along for
+    // tooltips only.
+    const sessions = await getWorkTypeSegmentsInRange(
       deps.devices,
       deps.events,
       Date.parse(start + "T00:00:00Z"),
@@ -448,20 +482,20 @@ export function createApp(deps: AppDependencies): Hono {
     const start = monthStart(monthAnyDate);
     const endExclusive = monthEndExclusive(monthAnyDate);
 
-    const sessions = await getSessionsForRequest(
-      deps,
+    const segments = await getWorkTypeSegmentsInRange(
+      deps.devices,
+      deps.events,
       Date.parse(start + "T00:00:00Z"),
       Date.parse(endExclusive + "T00:00:00Z"),
       timeZone,
       workType,
       deviceId,
     );
-    const daily = filterDailyHours(dailyHours(sessions, start, endExclusive, timeZone), dayType);
 
     return c.json({
       monthStart: start,
       monthEndExclusive: endExclusive,
-      days: daily.map((d) => ({ date: d.date, hours: d.workedTimeMs / 3_600_000 })),
+      days: dailyWorkTypeBreakdown(segments, start, endExclusive, timeZone, dayType),
     });
   });
 

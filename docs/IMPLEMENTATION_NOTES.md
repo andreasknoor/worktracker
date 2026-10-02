@@ -491,3 +491,36 @@ and only applies from that moment on, "always" read like "forever". Only the
 display labels changed. The wire and database values stay `alwaysWork` /
 `alwaysLeisure`, so the API, the history table and existing data are
 untouched.
+
+## Overview chart colored by work / leisure / mixed instead of by device (v1.26)
+
+At the user's request, the Weekly/Monthly overview no longer shows which
+device tracked the time. It shows what kind of time it was:
+
+- **Server**: `mergeClassifiedSessions` (core) merges each device's
+  classified pieces into disjoint `work` / `leisure` / `mixed` intervals,
+  coalescing across device handovers. `/api/stats/week`, `/weeks` and
+  `/month` add `workHours` / `mixedHours` / `leisureHours` per day, and
+  `/week-timeline` segments carry `workType`. Everything is computed in one
+  pass from the same per-device sessions: never three requests (all, work,
+  leisure), which would triple the raw-event scans (see the Neon transfer
+  overage above). The overview endpoints now always load the tracking-mode
+  history, but that rides along in the device-list query, so it's no extra
+  round trip.
+- **Dashboard**: Totals bars are stacked work (bottom) / mixed / leisure, with
+  2px gaps and the rounded end only on top. The comparison ghost bars stay
+  totals. The Timeline is colored by type. One legend lists the types that
+  occur. Tooltips and tables show the split; device names stay as tooltip
+  text (all devices for a mixed segment, since they explain it).
+- **Colors**: work = `--series-1` (blue), leisure = `--series-2` (orange),
+  aliased as `--work` / `--leisure`. Checked with the dataviz palette
+  validator in both themes. Every candidate third hue for "mixed" failed:
+  gray fails the chroma floor, and violet is CVD-indistinguishable from the
+  dark-theme blue. So mixed is drawn as diagonal stripes of both colors (SVG
+  `<pattern>`, `.swatch-mixed` gradient), which reads as "both" and is
+  separable by texture alone.
+- Under `?workType=work|leisure` everything is one type (no mixed), matching
+  the filtered totals.
+- Verified visually against a local preview server with in-memory synthetic
+  data (no Neon load), in both themes, week/month, Totals/Timeline and
+  comparison on.

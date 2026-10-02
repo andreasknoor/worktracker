@@ -18,6 +18,13 @@
   --series-7:       #4a3aa7;
   --series-8:       #e34948;
   --overlap:        #898781;
+  /* Work / leisure classification colors for the overview chart. Aliases of
+     the first two categorical slots (blue/orange: validated for CVD
+     separation in both themes); "mixed" is drawn as a stripe pattern of both
+     (SVG <pattern>, and .swatch-mixed below), never as a third hue. Being
+     var() references, they follow the dark-theme --series-* redefinitions. */
+  --work:           var(--series-1);
+  --leisure:        var(--series-2);
   --status-good:    #0ca30c;
   --status-warning: #fab219;
   --status-serious: #ec835a;
@@ -507,8 +514,11 @@ table.data-table td.num, table.data-table th.num {
 .chart-tooltip .tt-value { font-weight: 600; font-size: 13px; }
 
 /* Bars / lines */
-.bar { fill: var(--series-1); cursor: pointer; }
-.bar:hover, .bar.active { fill: color-mix(in srgb, var(--series-1) 85%, white 15%); }
+/* Stacked work / mixed / leisure segments of the overview bars; fill is set
+   inline per segment, so hover highlights via opacity on the rest. */
+.bar-seg { cursor: pointer; transition: opacity 0.12s; }
+.bars-dimmed .bar-seg { opacity: 0.45; }
+.bars-dimmed .bar-seg.active { opacity: 1; }
 .bar-label { font-size: 11px; fill: var(--text-secondary); font-variant-numeric: tabular-nums; text-anchor: middle; }
 .axis-label { font-size: 11px; fill: var(--text-muted); }
 .gridline { stroke: var(--gridline); stroke-width: 1; }
@@ -580,17 +590,16 @@ table.data-table td.num, table.data-table th.num {
 /* Timeline (24h-per-day) view */
 .timeline-track { fill: var(--gridline); }
 .timeline-core-hours { fill: var(--series-1); opacity: 0.10; }
-/* Default/fallback fill — overridden per-segment via an inline style once
-   device colors are known (see renderTimelineChart in app.js). Covers the
-   brief pre-render state and any path that doesn't set an inline fill. */
-.timeline-segment { fill: var(--series-1); cursor: pointer; }
-.timeline-segment:hover, .timeline-segment.active { fill: color-mix(in srgb, var(--series-1) 85%, white 15%); }
+/* Fallback fill only — segments get an inline work/leisure/mixed fill (see
+   workTypeFill in app.js). Hover highlights via opacity, since an inline
+   fill beats any stylesheet hover fill. */
+.timeline-segment { fill: var(--work); cursor: pointer; transition: opacity 0.12s; }
+.timeline-segment:hover, .timeline-segment.active { opacity: 0.8; }
 .timeline-hour-line { stroke: var(--gridline); stroke-width: 1; }
 .timeline-core-hours-label { font-size: 10px; fill: var(--text-muted); }
 
-/* Device-color legend, shown above the timeline chart in the aggregated
-   (all-devices) view only — one swatch per device that actually appears in
-   the current segments, plus an "Overlap" swatch when applicable. */
+/* Work / leisure / mixed legend above the overview chart (both Totals and
+   Timeline) — only the types that actually occur in the shown period. */
 .legend {
   display: flex;
   flex-wrap: wrap;
@@ -605,6 +614,9 @@ table.data-table td.num, table.data-table th.num {
   border-radius: 3px;
   flex: none;
 }
+.swatch-work { background: var(--work); }
+.swatch-leisure { background: var(--leisure); }
+.swatch-mixed { background: repeating-linear-gradient(45deg, var(--work) 0 2px, var(--leisure) 2px 4px); }
 
 /* Empty state */
 .empty-state {
