@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace WorkTrackerTracker.Core;
 
@@ -11,6 +12,14 @@ namespace WorkTrackerTracker.Core;
 public sealed record TrackerConfig(string ServerBaseUrl, string ApiKey, int PollIntervalSeconds)
 {
     public static readonly TrackerConfig Empty = new(string.Empty, string.Empty, 30);
+
+    /// <summary>
+    /// How captured time is classified, chosen in the tray menu (not in the
+    /// settings dialog). Kept across restarts. A config file written before
+    /// v1.30 has no such field and loads as <see cref="WorkTypeSetting.Server"/>.
+    /// </summary>
+    [JsonConverter(typeof(WorkTypeSettingJsonConverter))]
+    public WorkTypeSetting WorkTypeSetting { get; init; } = WorkTypeSetting.Server;
 
     public bool IsConfigured => !string.IsNullOrEmpty(ServerBaseUrl) && !string.IsNullOrEmpty(ApiKey);
 }

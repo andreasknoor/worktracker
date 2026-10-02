@@ -1,5 +1,5 @@
 import type { Pool } from "pg";
-import type { TrackingMode, TrackingModeChange } from "@worktracker/core";
+import type { StampedEvent, TrackingMode, TrackingModeChange, WorkType } from "@worktracker/core";
 import type {
   ActivityEventsRepository,
   Device,
@@ -191,25 +191,35 @@ export class PostgresDevicesRepository implements DevicesRepository {
 }
 
 // Keeps each INSERT well under Postgres's ~65535-bind-parameter limit
-// (2 params/row) regardless of how large a batch the caller passes in.
+// (1 param/row plus the shared device id and work type) regardless of how
+// large a batch the caller passes in.
 const INSERT_CHUNK_SIZE = 1000;
+
+interface StampedEventRow {
+  timestamp_utc: Date;
+  work_type: WorkType | null;
+}
+
+function toStampedEvent(row: StampedEventRow): StampedEvent {
+  return { timestamp: row.timestamp_utc.getTime(), workType: row.work_type };
+}
 
 export class PostgresActivityEventsRepository implements ActivityEventsRepository {
   constructor(private readonly pool: Pool) {}
 
-  async insertEvents(deviceId: string, timestampsMs: readonly number[]): Promise<void> {
+  async insertEvents(deviceId: string, timestampsMs: readonly number[], workType: WorkType | null = null): Promise<void> {
     for (let offset = 0; offset < timestampsMs.length; offset += INSERT_CHUNK_SIZE) {
       const chunk = timestampsMs.slice(offset, offset + INSERT_CHUNK_SIZE);
 
       const values: string[] = [];
-      const params: unknown[] = [];
+      const params: unknown[] = [deviceId, workType];
       chunk.forEach((ts, i) => {
-        values.push(`($${i * 2 + 1}, $${i * 2 + 2})`);
-        params.push(deviceId, new Date(ts));
+        values.push(`($1, $${i + 3}, $2)`);
+        params.push(new Date(ts));
       });
 
       await this.pool.query(
-        `INSERT INTO activity_events (device_id, timestamp_utc) VALUES ${values.join(", ")}
+        `INSERT INTO activity_events (device_id, timestamp_utc, work_type) VALUES ${values.join(", ")}
          ON CONFLICT (device_id, timestamp_utc) DO NOTHING`,
         params,
       );
@@ -224,6 +234,16 @@ export class PostgresActivityEventsRepository implements ActivityEventsRepositor
       [deviceId, new Date(startMs), new Date(endExclusiveMs)],
     );
     return result.rows.map((r) => r.timestamp_utc.getTime());
+  }
+
+  async getStampedEventsInRangeForDevice(deviceId: string, startMs: number, endExclusiveMs: number): Promise<StampedEvent[]> {
+    const result = await this.pool.query<StampedEventRow>(
+      `SELECT timestamp_utc, work_type FROM activity_events
+       WHERE device_id = $1 AND timestamp_utc >= $2 AND timestamp_utc < $3
+       ORDER BY timestamp_utc ASC`,
+      [deviceId, new Date(startMs), new Date(endExclusiveMs)],
+    );
+    return result.rows.map(toStampedEvent);
   }
 
   async getFirstEventTimestamp(deviceId?: string): Promise<number | null> {
@@ -249,6 +269,16 @@ export class PostgresActivityEventsRepository implements ActivityEventsRepositor
       [new Date(startMs), new Date(endExclusiveMs)],
     );
     return result.rows.map((r) => r.timestamp_utc.getTime());
+  }
+
+  async getStampedOrphanedEventsInRange(startMs: number, endExclusiveMs: number): Promise<StampedEvent[]> {
+    const result = await this.pool.query<StampedEventRow>(
+      `SELECT timestamp_utc, work_type FROM activity_events
+       WHERE device_id IS NULL AND timestamp_utc >= $1 AND timestamp_utc < $2
+       ORDER BY timestamp_utc ASC`,
+      [new Date(startMs), new Date(endExclusiveMs)],
+    );
+    return result.rows.map(toStampedEvent);
   }
 }
 

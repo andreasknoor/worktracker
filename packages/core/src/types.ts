@@ -26,3 +26,20 @@ export interface TrackingModeChange {
   effectiveFrom: Timestamp;
   mode: TrackingMode;
 }
+
+/**
+ * A point where the work type a tracker stamped on its events changes (see
+ * `workTypeChangesFromEvents`). `workType` governs that device's activity
+ * from `effectiveFrom` until the next change; `null` means "as defined on
+ * the server", i.e. classified by the device's tracking-mode history.
+ */
+export interface WorkTypeChange {
+  effectiveFrom: Timestamp;
+  workType: WorkType | null;
+}
+
+/** An activity event together with the work type its tracker stamped on it (`null`: as defined on the server). */
+export interface StampedEvent {
+  timestamp: Timestamp;
+  workType: WorkType | null;
+}

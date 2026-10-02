@@ -58,6 +58,12 @@ CREATE TABLE activity_events (
   -- name/color to attribute them to.
   device_id     uuid REFERENCES devices (id) ON DELETE SET NULL,
   timestamp_utc timestamptz NOT NULL,
+  -- The work type chosen in the tracker when this event was captured:
+  -- 'work'/'leisure', or NULL for "as defined on the server" (the device's
+  -- tracking_mode history decides). Stamped per event because events can sit
+  -- in a tracker's offline queue for days before they're sent. See
+  -- classifySlices() in packages/core/src/classification.ts.
+  work_type     text CHECK (work_type IN ('work', 'leisure')),
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 

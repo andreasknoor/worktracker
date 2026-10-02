@@ -51,11 +51,11 @@ Things to specifically check that couldn't be verified on the Mac:
   app relaunches correctly at login.
 - A real end-to-end run: does an activity event actually reach the server
   and show up on the dashboard?
-- The **Tracking mode** submenu (v1.24): the current mode is checked shortly
-  after start, switching updates the checkmark and the dashboard's device
-  list, a switch while offline shows "Couldn't switch mode" and keeps the
-  previous checkmark, and a change made in the dashboard shows up after the
-  next flush.
+- The **Tracking mode** submenu (v1.30): Work / Leisure / As defined on
+  server. The selected entry is checked, survives a restart, and switching
+  works offline. "As defined on server" shows the dashboard's mode shortly
+  after start and follows a dashboard change after the next flush. Time
+  captured under Work/Leisure shows up as such in the dashboard.
 
 ## Run & test
 
@@ -93,10 +93,10 @@ Point the "Start with Windows" Registry value (and any shortcut) at
 
 ## Structure
 
-- `TrackerConfig.cs` / `ConfigStore` — config (server URL, API key, poll interval) and its JSON persistence.
+- `TrackerConfig.cs` / `ConfigStore` — config (server URL, API key, poll interval, work type setting) and its JSON persistence.
 - `IdlePolicy.cs` — the pure "was the user active during this poll window" decision, plus the resume-confirmation-window widening rule from `docs/SESSION_LOGIC_SPEC.md`.
-- `EventsApiClient.cs` — `POST /api/events`, batched, Bearer-authenticated; `GET`/`PUT /api/tracker/mode`.
-- `TrackingMode.cs` — the tracking-mode values and `TrackingModeController` (startup read, menu switch, server-reported updates).
+- `EventsApiClient.cs` — `POST /api/events`, batched, Bearer-authenticated, with the batch's work type; `GET /api/tracker/mode`.
+- `TrackingMode.cs` — the work type setting, the server's tracking-mode values and `TrackingModeController` (mirrors the server mode for the menu: startup read, server-reported updates).
 - `ActivityQueue.cs` — persisted queue of not-yet-sent timestamps; survives quits and network blips.
 - `NativeIdleTime.cs` / `IdleMonitor.cs` (App) — the real `GetLastInputInfo`-backed timer loop.
 - `TrayIconController.cs` / `SettingsForm.cs` / `TrackerTrayApplicationContext.cs` (App) — the tray UI shell wiring the above together.

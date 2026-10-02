@@ -19,6 +19,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var flushTimer: Timer?
     private var pendingCountForDisplay = 0
 
+    /// Set when a server answered a batch carrying a work type without
+    /// `acceptsWorkType` (pre-v1.30), i.e. silently ignored it.
+    private var serverIgnoresWorkType = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // A second instance would race the first on queue.json and show a
         // duplicate menu-bar icon (the Windows tracker uses a named mutex).
@@ -35,17 +39,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusBarController = StatusBarController(initialConfig: config)
         statusBarController.onSettingsSaved = { [weak self] newConfig in
-            self?.applyConfig(newConfig)
+            guard let self else { return }
+            // The settings dialog doesn't edit the work type setting.
+            var merged = newConfig
+            merged.workTypeSetting = self.config.workTypeSetting
+            self.applyConfig(merged)
         }
-        statusBarController.onTrackingModeSelected = { [weak self] mode in
-            self?.selectTrackingMode(mode)
+        statusBarController.onWorkTypeSettingSelected = { [weak self] setting in
+            self?.selectWorkTypeSetting(setting)
         }
         // Every accepted event batch reports the device's current mode (e.g.
         // after a change in the dashboard). Only the controller is touched
         // here, off the main thread; the menu refreshes after each flush.
         let controller = trackingMode
-        apiClient.onTrackingModeReported = { mode, startedAt in
-            controller.report(mode, requestStartedAt: startedAt)
+        apiClient.onTrackingModeReported = { mode in
+            controller.report(mode)
+        }
+        apiClient.onWorkTypeSupportReported = { [weak self] supported in
+            DispatchQueue.main.async { self?.serverIgnoresWorkType = !supported }
         }
 
         applyConfig(config)
@@ -83,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // The server URL or API key may have changed, i.e. a different device.
         trackingMode.reset()
+        serverIgnoresWorkType = false
         refreshTrackingModeMenu()
 
         guard config.isConfigured else {
@@ -159,7 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func recordActivity() {
-        activityQueue.enqueue(Date())
+        activityQueue.enqueue(Date(), workType: config.workTypeSetting.stampedWorkType)
         statusBarController.update(
             isActive: true, pendingCount: activityQueue.pendingCount,
             lastSuccessfulSyncAt: activityQueue.lastSuccessfulSyncAt, lastError: activityQueue.lastError
@@ -184,24 +196,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func selectTrackingMode(_ mode: TrackingMode) {
-        guard config.isConfigured else { return }
-        let controller = trackingMode
-        let serverBaseURL = config.serverBaseURL
-        let apiKey = config.apiKey
-
-        // Show "switching…" right away; the controller itself flips its
-        // state only once its task starts running.
-        statusBarController.updateTrackingMode(controller.currentMode, isSwitching: true, error: nil)
-        Task {
-            await controller.select(mode, serverBaseURL: serverBaseURL, apiKey: apiKey)
-            await MainActor.run { self.refreshTrackingModeMenu() }
-        }
+    /// Purely local and instant: events captured from now on are stamped
+    /// with the new setting, nothing already queued changes.
+    private func selectWorkTypeSetting(_ setting: WorkTypeSetting) {
+        config.workTypeSetting = setting
+        try? ConfigStore.save(config, to: configFileURL)
+        refreshTrackingModeMenu()
     }
 
     private func refreshTrackingModeMenu() {
         statusBarController.updateTrackingMode(
-            trackingMode.currentMode, isSwitching: trackingMode.isSwitching, error: trackingMode.lastError
+            config.workTypeSetting,
+            serverMode: trackingMode.currentMode,
+            serverIgnoresWorkType: serverIgnoresWorkType && config.workTypeSetting != .server
         )
     }
 }

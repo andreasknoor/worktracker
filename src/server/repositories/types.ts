@@ -1,4 +1,4 @@
-import type { TrackingMode, TrackingModeChange } from "@worktracker/core";
+import type { StampedEvent, TrackingMode, TrackingModeChange, WorkType } from "@worktracker/core";
 
 export type Platform = "windows" | "mac";
 
@@ -83,9 +83,20 @@ export interface ActivityEvent {
 }
 
 export interface ActivityEventsRepository {
-  insertEvents(deviceId: string, timestampsMs: readonly number[]): Promise<void>;
+  /**
+   * `workType` is what the tracker stamped on the whole batch: `"work"` /
+   * `"leisure"` as chosen in its menu, or `null` for "as defined on the
+   * server" (the device's tracking mode decides). Re-inserting an existing
+   * `(deviceId, timestamp)` is a no-op and keeps the stored work type.
+   */
+  insertEvents(deviceId: string, timestampsMs: readonly number[], workType?: WorkType | null): Promise<void>;
   /** Events with `timestampMs` in `[startMs, endExclusiveMs)`, for one device. */
   getEventsInRangeForDevice(deviceId: string, startMs: number, endExclusiveMs: number): Promise<number[]>;
+  /**
+   * Same range as `getEventsInRangeForDevice`, sorted ascending, together with
+   * each event's stamped work type — only loaded when classifying.
+   */
+  getStampedEventsInRangeForDevice(deviceId: string, startMs: number, endExclusiveMs: number): Promise<StampedEvent[]>;
   /** The earliest recorded event, optionally scoped to one device, or null if none exist. */
   getFirstEventTimestamp(deviceId?: string): Promise<number | null>;
   /**
@@ -96,6 +107,8 @@ export interface ActivityEventsRepository {
   orphanEventsForDevice(deviceId: string): Promise<void>;
   /** Events with no device (see `orphanEventsForDevice`) in `[startMs, endExclusiveMs)`. */
   getOrphanedEventsInRange(startMs: number, endExclusiveMs: number): Promise<number[]>;
+  /** Same as `getOrphanedEventsInRange`, together with each event's stamped work type. */
+  getStampedOrphanedEventsInRange(startMs: number, endExclusiveMs: number): Promise<StampedEvent[]>;
 }
 
 export interface GlobalSettings {

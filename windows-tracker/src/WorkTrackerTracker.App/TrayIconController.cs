@@ -6,7 +6,7 @@ namespace WorkTrackerTracker.App;
 
 /// <summary>
 /// Owns the tray icon and its context menu: a live status line, a pending
-/// (not-yet-synced) event count, the work/leisure tracking-mode switch, a
+/// (not-yet-synced) event count, the work/leisure tracking-mode choice, a
 /// settings dialog, and Exit. All actual tracking logic lives in IdleMonitor
 /// / ActivityQueue / TrackingModeController; this is just the UI shell
 /// around them — the Windows analogue of the Mac tracker's
@@ -22,13 +22,13 @@ internal sealed class TrayIconController : IDisposable
     private readonly ToolStripMenuItem _errorItem;
     private readonly ToolStripMenuItem _trackingModeItem;
     private readonly ToolStripMenuItem _trackingModeErrorItem;
-    private readonly Dictionary<TrackingMode, ToolStripMenuItem> _trackingModeItems = new();
+    private readonly Dictionary<WorkTypeSetting, ToolStripMenuItem> _trackingModeItems = new();
     private SettingsForm? _settingsForm;
 
     private TrackerConfig _currentConfig;
 
     public event Action<TrackerConfig>? SettingsSaved;
-    public event Action<TrackingMode>? TrackingModeSelected;
+    public event Action<WorkTypeSetting>? WorkTypeSettingSelected;
 
     public TrayIconController(TrackerConfig initialConfig)
     {
@@ -40,12 +40,12 @@ internal sealed class TrayIconController : IDisposable
         _errorItem = new ToolStripMenuItem { Enabled = false, Visible = false };
 
         _trackingModeItem = new ToolStripMenuItem("Tracking mode");
-        foreach (var mode in TrackingModes.All)
+        foreach (var setting in WorkTypes.AllSettings)
         {
-            var item = new ToolStripMenuItem(TrackingModes.MenuTitle(mode));
-            item.Click += (_, _) => TrackingModeSelected?.Invoke(mode);
+            var item = new ToolStripMenuItem(WorkTypes.MenuTitle(setting, serverMode: null));
+            item.Click += (_, _) => WorkTypeSettingSelected?.Invoke(setting);
             _trackingModeItem.DropDownItems.Add(item);
-            _trackingModeItems[mode] = item;
+            _trackingModeItems[setting] = item;
         }
         _trackingModeItem.DropDownItems.Add(new ToolStripSeparator());
         _trackingModeItem.DropDownItems.Add(new ToolStripMenuItem("Applies from now on") { Enabled = false });
@@ -80,24 +80,25 @@ internal sealed class TrayIconController : IDisposable
         };
 
         Update(isActive: false, pendingCount: 0);
-        UpdateTrackingMode(null, isSwitching: false, error: null);
+        UpdateTrackingMode(initialConfig.WorkTypeSetting, serverMode: null, serverIgnoresWorkType: false);
     }
 
     /// <summary>
-    /// Checks the current mode (none while unknown) and disables switching
-    /// while unconfigured or while a switch is in flight. Call on the UI thread.
+    /// Checks the selected setting. <paramref name="serverMode"/> (null while
+    /// unknown) is shown next to "As defined on server";
+    /// <paramref name="serverIgnoresWorkType"/> shows a warning that a
+    /// pre-v1.30 server dropped the work type. Call on the UI thread.
     /// </summary>
-    public void UpdateTrackingMode(TrackingMode? mode, bool isSwitching, string? error)
+    public void UpdateTrackingMode(WorkTypeSetting setting, TrackingMode? serverMode, bool serverIgnoresWorkType)
     {
-        var label = mode is { } known ? $"Tracking mode: {TrackingModes.MenuTitle(known)}" : "Tracking mode";
-        _trackingModeItem.Text = isSwitching ? $"{label} (switching…)" : label;
-        foreach (var (itemMode, item) in _trackingModeItems)
+        _trackingModeItem.Text = $"Tracking mode: {WorkTypes.MenuTitle(setting, serverMode)}";
+        foreach (var (itemSetting, item) in _trackingModeItems)
         {
-            item.Checked = itemMode == mode;
-            item.Enabled = _currentConfig.IsConfigured && !isSwitching;
+            item.Text = WorkTypes.MenuTitle(itemSetting, serverMode);
+            item.Checked = itemSetting == setting;
         }
-        _trackingModeErrorItem.Text = error is null ? string.Empty : $"⚠ Couldn't switch mode: {error}";
-        _trackingModeErrorItem.Visible = error is not null;
+        _trackingModeErrorItem.Text = "⚠ Server ignores the tracking mode (update the server)";
+        _trackingModeErrorItem.Visible = serverIgnoresWorkType;
     }
 
     // Drawn at runtime rather than shipped as an .ico resource, so the tray

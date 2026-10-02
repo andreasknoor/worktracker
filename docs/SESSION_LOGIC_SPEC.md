@@ -63,8 +63,13 @@ which bucket each piece of a session counts toward, per device:
 1. Split the device's sessions at local midnight (`splitByDay`, in
    `APP_TIME_ZONE`).
 2. Split those day-slices again at every change in the device's tracking-mode
-   history (`splitAtInstants`).
-3. Classify each piece with `classifyDay(date, mode)`, where `mode` is the
+   history and at every change of the work type stamped on its events
+   (`splitAtInstants`; the change points come from
+   `workTypeChangesFromEvents`: the first event, then the first event of
+   every run with a different value).
+3. If the work type stamped at the piece's start (`workTypeAt`) isn't
+   `null`, that's the piece's classification. Otherwise ("as defined on the
+   server") classify it with `classifyDay(date, mode)`, where `mode` is the
    history entry in effect at the piece's start (`trackingModeAt`): the
    latest entry with `effectiveFrom <= start`; for equal instants the later
    entry wins; before the first entry, the first entry's mode; with no
@@ -75,4 +80,5 @@ which bucket each piece of a session counts toward, per device:
    unclassified views.
 
 Because history entries are only ever appended with the server's current
-time, the classification of already-tracked time never changes.
+time, and a stamped work type is fixed when the event is first stored, the
+classification of already-tracked time never changes.

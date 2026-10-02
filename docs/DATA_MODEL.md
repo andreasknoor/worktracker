@@ -51,6 +51,7 @@ Raw activity timestamps only — never key content, window titles, or applicatio
 | `id` | bigserial PK | |
 | `device_id` | uuid/int FK → `devices.id`, **nullable**, `ON DELETE SET NULL` | Null means the owning device was permanently deleted (see above) — the event row itself is never deleted, so historical hours keep counting, just without a device to attribute them to (`getOrphanedEventsInRange` in `sessionsService.ts`, folded into the aggregated view using default idle-threshold/poll-interval/`auto`-tracking-mode settings). |
 | `timestamp_utc` | timestamptz | when the input event occurred (client-observed time, sent as UTC) |
+| `work_type` | text, **nullable**, `'work'` / `'leisure'` | the work type chosen in the tracker's menu when the event was captured (v1.30); `NULL` = "as defined on the server", i.e. the device's tracking-mode history decides. Every event before v1.30 is `NULL`. Stamped per event because events can sit in a tracker's offline queue for days (`scripts/migrations/2026-10-02-event-work-type.mjs`). |
 | `created_at` | timestamptz | server insert time (for debugging/ops, not used in calculations) |
 
 Index: `(device_id, timestamp_utc)` and a plain index on `timestamp_utc` for cross-device range queries.

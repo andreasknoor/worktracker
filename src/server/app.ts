@@ -159,7 +159,8 @@ function dailyWorkTypeBreakdown(
 //
 // A second, independent filter dimension from `?dayType=` above: classifies
 // logged time as work or leisure per device (`classifySlices`, using the
-// tracking mode each device had when the activity happened) rather than by
+// tracking mode each device had when the activity happened, or the work type
+// its tracker stamped on the events) rather than by
 // raw calendar day alone. Both filters can be applied at once. See
 // docs/API_CONTRACT.md.
 
@@ -843,9 +844,17 @@ export function createApp(deps: AppDependencies): Hono {
     const device = c.get("device");
 
     const body = await c.req
-      .json<{ timestamp?: string; timestamps?: string[] }>()
-      .catch(() => ({ timestamp: undefined, timestamps: undefined }));
+      .json<{ timestamp?: string; timestamps?: string[]; workType?: WorkType | null }>()
+      .catch(() => ({ timestamp: undefined, timestamps: undefined, workType: undefined }));
     const raw = body.timestamps ?? (body.timestamp ? [body.timestamp] : []);
+
+    // The work type the tracker had selected when it captured this batch;
+    // missing/null means "as defined on the server" (the device's tracking
+    // mode decides), which is also what trackers before v1.30 imply.
+    const workType = body.workType ?? null;
+    if (workType !== null && !WORK_TYPE_VALUES.includes(workType)) {
+      return c.json({ error: `workType must be one of: ${WORK_TYPE_VALUES.join(", ")}, or null` }, 400);
+    }
 
     if (raw.length > MAX_EVENTS_PER_REQUEST) {
       return c.json({ error: `At most ${MAX_EVENTS_PER_REQUEST} timestamps per request` }, 400);
@@ -857,14 +866,16 @@ export function createApp(deps: AppDependencies): Hono {
       return c.json({ error: "No valid timestamps provided" }, 400);
     }
 
-    await deps.events.insertEvents(device.id, parsed);
+    await deps.events.insertEvents(device.id, parsed, workType);
     await deps.devices.touchLastSeen(device.id, now());
 
     // The device's current tracking mode rides along on every accepted
     // batch, so trackers learn about a change made in the dashboard within
     // one flush interval without polling for it — the device row is already
     // loaded for authentication, so this costs no extra query.
-    return c.json({ trackingMode: device.trackingMode }, 201);
+    // `acceptsWorkType` tells a tracker that its `workType` was stored; a
+    // server before v1.30 silently ignores the field and omits the flag.
+    return c.json({ trackingMode: device.trackingMode, acceptsWorkType: true }, 201);
   });
 
   // ---------- Tracker self-service (device API key) ----------

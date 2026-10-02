@@ -5,6 +5,11 @@ import Foundation
 /// see API_CONTRACT.md's note on why batched event posting exists. Only
 /// entries the server has actually accepted are ever removed.
 ///
+/// Each entry carries the work type selected in the menu when it was
+/// captured (nil: "as defined on the server"), since it may be sent much
+/// later. A request only ever carries one work type, so a chunk ends where
+/// the work type changes.
+///
 /// Behavior during a sustained server outage (kept in sync with the Windows
 /// tracker's `ActivityQueue.cs`):
 ///  - `flush()` sends in chunks of at most `chunkSize` timestamps, well
@@ -50,7 +55,13 @@ final class ActivityQueue {
     /// acceptable trade-off for activity timestamps.
     static let defaultPersistDebounceIntervalSeconds: TimeInterval = 5
 
-    private var pending: [Date]
+    /// One captured activity timestamp and the work type it was captured under.
+    struct Entry: Equatable {
+        let date: Date
+        let workType: WorkType?
+    }
+
+    private var pending: [Entry]
     private let storageURL: URL
     private let dateFormatter: ISO8601DateFormatter
     private let maxPendingCount: Int
@@ -114,15 +125,18 @@ final class ActivityQueue {
 
     /// Exposed for tests to inspect which timestamps survived cap eviction;
     /// production callers only need `pendingCount`.
-    var pendingTimestamps: [Date] { lock.withLock { pending } }
+    var pendingTimestamps: [Date] { lock.withLock { pending.map(\.date) } }
+
+    /// Exposed for tests; see `pendingTimestamps`.
+    var pendingEntries: [Entry] { lock.withLock { pending } }
 
     /// Number of flush attempts that have failed in a row since the last
     /// success (or since the queue was created). Exposed for tests.
     var currentConsecutiveFailureCount: Int { lock.withLock { consecutiveFailureCount } }
 
-    func enqueue(_ date: Date) {
+    func enqueue(_ date: Date, workType: WorkType? = nil) {
         lock.withLock {
-            pending.append(date)
+            pending.append(Entry(date: date, workType: workType))
             if pending.count > maxPendingCount {
                 let overflow = pending.count - maxPendingCount
                 pending.removeFirst(overflow)
@@ -144,7 +158,9 @@ final class ActivityQueue {
 
         while let chunk = nextChunk() {
             do {
-                try await client.postEvents(chunk.timestamps, serverBaseURL: serverBaseURL, apiKey: apiKey)
+                try await client.postEvents(
+                    chunk.timestamps, workType: chunk.workType, serverBaseURL: serverBaseURL, apiKey: apiKey
+                )
                 completeChunk(endSequence: chunk.endSequence, rejected: false)
             } catch let error as APIClientError where error.isPermanentRejection {
                 // The server understood the request and refuses this data;
@@ -167,11 +183,12 @@ final class ActivityQueue {
         }
     }
 
-    private func nextChunk() -> (timestamps: [Date], endSequence: Int)? {
+    /// The longest prefix of at most `chunkSize` entries that share one work type.
+    private func nextChunk() -> (timestamps: [Date], workType: WorkType?, endSequence: Int)? {
         lock.withLock {
-            guard !pending.isEmpty else { return nil }
-            let chunk = Array(pending.prefix(chunkSize))
-            return (chunk, headSequence + chunk.count)
+            guard let first = pending.first else { return nil }
+            let chunk = pending.prefix(chunkSize).prefix { $0.workType == first.workType }
+            return (chunk.map(\.date), first.workType, headSequence + chunk.count)
         }
     }
 
@@ -248,7 +265,8 @@ final class ActivityQueue {
     /// leaves `hasUnpersistedChanges` set so the next attempt retries.
     private func persist() {
         let state = PersistedState(
-            pending: pending.map { dateFormatter.string(from: $0) },
+            pending: pending.map { dateFormatter.string(from: $0.date) },
+            workTypes: pending.map(\.workType),
             lastSuccessfulSyncAt: lastSuccessfulSyncAt.map { dateFormatter.string(from: $0) }
         )
         do {
@@ -267,16 +285,26 @@ final class ActivityQueue {
     /// The on-disk shape. Kept separate from `[Date]`/`Date` so it can be
     /// `Codable` without teaching `Date` to round-trip through the same
     /// `ISO8601DateFormatter` this class already uses elsewhere.
+    ///
+    /// `workTypes` runs parallel to `pending`. Files written before it
+    /// existed (v1.30) lack it, and their entries load as nil — correct, as
+    /// they were all captured "as defined on the server".
     private struct PersistedState: Codable {
         var pending: [String]
+        var workTypes: [WorkType?]?
         var lastSuccessfulSyncAt: String?
     }
 
-    private static func load(from url: URL, using formatter: ISO8601DateFormatter) -> (pending: [Date], lastSuccessfulSyncAt: Date?) {
+    private static func load(from url: URL, using formatter: ISO8601DateFormatter) -> (pending: [Entry], lastSuccessfulSyncAt: Date?) {
         guard let data = try? Data(contentsOf: url) else { return ([], nil) }
 
         if let state = try? JSONDecoder().decode(PersistedState.self, from: data) {
-            let pending = state.pending.compactMap { formatter.date(from: $0) }
+            let workTypes = state.workTypes?.count == state.pending.count
+                ? state.workTypes!
+                : Array(repeating: nil, count: state.pending.count)
+            let pending = zip(state.pending, workTypes).compactMap { raw, workType in
+                formatter.date(from: raw).map { Entry(date: $0, workType: workType) }
+            }
             let lastSync = state.lastSuccessfulSyncAt.flatMap { formatter.date(from: $0) }
             return (pending, lastSync)
         }
@@ -285,7 +313,7 @@ final class ActivityQueue {
         // (no lastSuccessfulSyncAt yet) — fall back to that shape so
         // upgrading doesn't drop an existing queue.
         if let strings = try? JSONDecoder().decode([String].self, from: data) {
-            return (strings.compactMap { formatter.date(from: $0) }, nil)
+            return (strings.compactMap { formatter.date(from: $0) }.map { Entry(date: $0, workType: nil) }, nil)
         }
 
         // Neither shape parsed: keep the unreadable file for manual

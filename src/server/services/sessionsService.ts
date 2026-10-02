@@ -7,12 +7,16 @@ import {
   mergeSessions,
   mergeSessionsWithDeviceIds,
   splitByDay,
+  workTypeChangesFromEvents,
   type AttributedSession,
+  type ClassifiedSlice,
+  type StampedEvent,
   type TimeZone,
   type TrackingMode,
   type TrackingModeChange,
   type WorkSession,
   type WorkType,
+  type WorkTypeChange,
   type WorkTypeSegment,
 } from "@worktracker/core";
 import type { ActivityEventsRepository, DevicesRepository, DeviceWithModeHistory } from "../repositories/types.js";
@@ -40,6 +44,12 @@ interface PerDeviceSessions {
   trackingMode: TrackingMode;
   /** Only loaded when classifying (`withModeHistory`); empty otherwise. */
   modeHistory: TrackingModeChange[];
+  /**
+   * Where the work type the tracker stamped on its events changes (see
+   * `workTypeChangesFromEvents`). Only loaded when classifying; empty
+   * otherwise.
+   */
+  workTypeChanges: WorkTypeChange[];
   sessions: WorkSession[];
 }
 
@@ -54,7 +64,8 @@ interface PerDeviceSessions {
  * `ORPHANED_DEVICE_ID`) are folded in too, using default settings.
  *
  * `withModeHistory` additionally loads each device's tracking-mode history
- * for the range — in the same query as the device list, and only when a
+ * for the range — in the same query as the device list — and the work type
+ * stamped on each event, in the same query as the events. Both only when a
  * caller actually classifies work/leisure, so unfiltered views cost nothing
  * extra (docs/PLAN_TRACKER_MODE_TOGGLE.md, "Neon load budget").
  */
@@ -71,18 +82,32 @@ async function getPerDeviceSessions(
     : (await devicesRepo.list()).map((d) => ({ ...d, modeHistory: [] }));
   const devices = deviceId ? allDevices.filter((d) => d.id === deviceId) : allDevices;
 
+  // Timestamps plus, when classifying, where the stamped work type changes.
+  const loadEvents = async (
+    plain: () => Promise<number[]>,
+    stamped: () => Promise<StampedEvent[]>,
+  ): Promise<{ timestamps: number[]; workTypeChanges: WorkTypeChange[] }> => {
+    if (!withModeHistory) return { timestamps: await plain(), workTypeChanges: [] };
+    const events = await stamped();
+    return { timestamps: events.map((e) => e.timestamp), workTypeChanges: workTypeChangesFromEvents(events) };
+  };
+
   const perDevice = await Promise.all(
     devices.map(async (device): Promise<PerDeviceSessions> => {
       const idleThresholdMs = device.idleThresholdMinutes * 60_000;
       const resumeConfirmationWindowMs = effectiveResumeConfirmationWindow(device.pollIntervalSeconds * 1000);
       const bufferedStartMs = bufferedRangeStart(startMs, idleThresholdMs);
 
-      const timestamps = await eventsRepo.getEventsInRangeForDevice(device.id, bufferedStartMs, endExclusiveMs);
+      const { timestamps, workTypeChanges } = await loadEvents(
+        () => eventsRepo.getEventsInRangeForDevice(device.id, bufferedStartMs, endExclusiveMs),
+        () => eventsRepo.getStampedEventsInRangeForDevice(device.id, bufferedStartMs, endExclusiveMs),
+      );
 
       return {
         deviceId: device.id,
         trackingMode: device.trackingMode,
         modeHistory: device.modeHistory,
+        workTypeChanges,
         sessions: calculateSessions(timestamps, idleThresholdMs, resumeConfirmationWindowMs),
       };
     }),
@@ -92,12 +117,16 @@ async function getPerDeviceSessions(
     const idleThresholdMs = ORPHANED_IDLE_THRESHOLD_MINUTES * 60_000;
     const resumeConfirmationWindowMs = effectiveResumeConfirmationWindow(ORPHANED_POLL_INTERVAL_SECONDS * 1000);
     const bufferedStartMs = bufferedRangeStart(startMs, idleThresholdMs);
-    const timestamps = await eventsRepo.getOrphanedEventsInRange(bufferedStartMs, endExclusiveMs);
+    const { timestamps, workTypeChanges } = await loadEvents(
+      () => eventsRepo.getOrphanedEventsInRange(bufferedStartMs, endExclusiveMs),
+      () => eventsRepo.getStampedOrphanedEventsInRange(bufferedStartMs, endExclusiveMs),
+    );
     if (timestamps.length > 0) {
       perDevice.push({
         deviceId: ORPHANED_DEVICE_ID,
         trackingMode: ORPHANED_TRACKING_MODE,
         modeHistory: [],
+        workTypeChanges,
         sessions: calculateSessions(timestamps, idleThresholdMs, resumeConfirmationWindowMs),
       });
     }
@@ -109,18 +138,26 @@ async function getPerDeviceSessions(
 /**
  * Restricts each device's sessions to the pieces classified as `workType`
  * for that device (`classifySlices`): split per calendar day, and further at
- * every change in the device's tracking-mode history, each piece classified
- * by the mode in effect *when it happened*. A device left on "auto" can
+ * every change in the device's tracking-mode history and in the work type
+ * its tracker stamped on the events, each piece classified by the values in
+ * effect *when it happened*. A device left on "auto" can
  * contribute work time on a weekday and leisure time on the weekend within
  * the very same query range, and a device switched mid-day contributes both
  * on the same day.
  */
+function classifyDevice(
+  { sessions, modeHistory, trackingMode, workTypeChanges }: PerDeviceSessions,
+  timeZone: TimeZone,
+): ClassifiedSlice[] {
+  return classifySlices(splitByDay(sessions, timeZone), modeHistory, trackingMode, workTypeChanges);
+}
+
 function filterByWorkType(perDevice: readonly PerDeviceSessions[], timeZone: TimeZone, workType: WorkType): PerDeviceSessions[] {
-  return perDevice.map(({ deviceId, trackingMode, modeHistory, sessions }) => {
-    const matching = classifySlices(splitByDay(sessions, timeZone), modeHistory, trackingMode)
+  return perDevice.map((device) => {
+    const matching = classifyDevice(device, timeZone)
       .filter((slice) => slice.workType === workType)
       .map((slice): WorkSession => ({ start: slice.start, end: slice.end }));
-    return { deviceId, trackingMode, modeHistory, sessions: matching };
+    return { ...device, sessions: matching };
   });
 }
 
@@ -211,10 +248,10 @@ export async function getWorkTypeSegmentsInRange(
   deviceId?: string,
 ): Promise<WorkTypeSegment[]> {
   const perDevice = await getPerDeviceSessions(devicesRepo, eventsRepo, startMs, endExclusiveMs, deviceId, true);
-  const pieces = perDevice.flatMap(({ deviceId: id, trackingMode, modeHistory, sessions }) =>
-    classifySlices(splitByDay(sessions, timeZone), modeHistory, trackingMode)
+  const pieces = perDevice.flatMap((device) =>
+    classifyDevice(device, timeZone)
       .filter((slice) => workType === "all" || slice.workType === workType)
-      .map((slice) => ({ start: slice.start, end: slice.end, workType: slice.workType, deviceId: id })),
+      .map((slice) => ({ start: slice.start, end: slice.end, workType: slice.workType, deviceId: device.deviceId })),
   );
   return mergeClassifiedSessions(pieces);
 }

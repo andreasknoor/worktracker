@@ -166,10 +166,21 @@ tray shell) has never been run outside Windows — see
   session.** `requireDeviceKey` guards `/api/events` and `/api/tracker/*`
   (registered on both `/api/tracker` and `/api/tracker/*`). The tracker-facing
   routes must stay outside the dashboard-gated prefixes: a path like
-  `/api/devices/me/...` would be caught by the dashboard gate. Trackers can
-  only read and switch their own tracking mode (`GET`/`PUT
-  /api/tracker/mode`); `POST /api/events` answers with the current mode,
-  which is how the menus follow dashboard changes without polling.
+  `/api/devices/me/...` would be caught by the dashboard gate. `POST
+  /api/events` answers with the device's current mode, which is how the
+  menus follow dashboard changes without polling.
+- **Two sources classify work/leisure, both by their value at capture
+  time.** (1) The work type the tracker stamps on each event
+  (`activity_events.work_type`, chosen in the tracker's menu: Work /
+  Leisure / As defined on server = `NULL`); it's per event because events
+  sit in the offline queue for days. (2) If that's `NULL`, the device's
+  server-side tracking mode at the time (set only in the dashboard; the
+  trackers' `PUT /api/tracker/mode` is unused since v1.30). `classifySlices`
+  cuts at changes of either. On the trackers, the setting lives in
+  `config.json` (decoded tolerantly: a decode error there drops the API
+  key), each queue entry carries its work type, and a request never mixes
+  two. `TrackingModeController` only mirrors the server mode for the menu
+  label. See `docs/PLAN_TRACKER_LOCAL_WORK_TYPE.md`.
 - **Two-step device deletion.** `DELETE /api/devices/:id` soft-revokes
   (unchanged); `DELETE /api/devices/:id?permanent=true` hard-deletes the row,
   but only once already revoked (a safety gate, not a data-integrity
@@ -181,7 +192,7 @@ tray shell) has never been run outside Windows — see
   `sessionsService.ts` folds in a synthetic orphaned-events entry only when
   there's no `?deviceId=` filter.
 
-- **The dashboard is one hand-written file.** `public/js/app.js` (~1900 lines,
+- **The dashboard is one hand-written file.** `public/js/app.js` (~2400 lines,
   plain script, no modules/bundler/lint step) plus `public/index.html` and
   `public/css/styles.css`; charts are hand-built SVG, not a charting library.
   View state (period, device filter, day/work type, theme) is persisted through a
@@ -211,6 +222,9 @@ build without a guaranteed working-directory-relative read of
 `package.json`; the Windows tracker as its own .NET project outside the npm
 workspace).
 
+Commit titles of version-bumping changes end with the new version in
+parentheses, e.g. `Label the overview's 8h line as a work target (v1.28)`.
+
 ## Repo layout gotchas
 
 - **`handoff-package/` is a frozen pre-implementation snapshot**, not live code:
@@ -236,3 +250,12 @@ workspace).
   including deviations from the original design docs and bugs that were only
   caught by testing the live deployment (worth reading before touching
   routing, auth middleware, or the Mac tracker's UI shell).
+- `docs/PLAN_TRACKER_LOCAL_WORK_TYPE.md` — the tracker-side work type
+  (v1.30): functional spec and design.
+- `docs/PLAN_TRACKER_MODE_TOGGLE.md` — effort/risk assessment and phased
+  rollout (v1.22–v1.24) of the per-device work/leisure mode switchable from
+  the trackers; adopts the design of `docs/PLAN_TIMESTAMPED_WORK_LEISURE.md`.
+- `docs/NOTES_FOR_MAC_BUILD.md` — why the Windows tracker's `App` can't be
+  verified on the Mac.
+- `docs/README.md` is the original handoff briefing for the rewrite, not a
+  README for the current project.

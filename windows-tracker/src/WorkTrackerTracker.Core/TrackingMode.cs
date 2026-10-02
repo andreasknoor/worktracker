@@ -1,11 +1,14 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace WorkTrackerTracker.Core;
 
 /// <summary>
-/// The device's work/leisure classification mode, mirroring the server's
-/// <c>trackingMode</c> values (see docs/API_CONTRACT.md). A switch applies
-/// from the moment the server receives it; time already tracked keeps the
-/// mode it was tracked under. Kept in sync with the Mac tracker's
-/// TrackingMode.swift.
+/// The device's server-side work/leisure classification mode, set in the
+/// dashboard — mirroring the server's <c>trackingMode</c> values (see
+/// docs/API_CONTRACT.md). It only governs time captured while the tracker's
+/// own <see cref="WorkTypeSetting"/> is <see cref="WorkTypeSetting.Server"/>.
+/// Kept in sync with the Mac tracker's TrackingMode.swift.
 /// </summary>
 public enum TrackingMode
 {
@@ -44,7 +47,7 @@ public static class TrackingModes
 
     public static string MenuTitle(TrackingMode mode) => mode switch
     {
-        TrackingMode.Auto => "Auto (weekdays work, weekends leisure)",
+        TrackingMode.Auto => "Auto",
         TrackingMode.AlwaysWork => "Work",
         TrackingMode.AlwaysLeisure => "Leisure",
         _ => throw new ArgumentOutOfRangeException(nameof(mode)),
@@ -52,75 +55,148 @@ public static class TrackingModes
 }
 
 /// <summary>
-/// Reads and switches this device's own tracking mode via GET/PUT
+/// The work type stamped on a captured event (POST /api/events'
+/// <c>workType</c>). Absent (null) means "as defined on the server".
+/// </summary>
+public enum WorkType
+{
+    Work,
+    Leisure,
+}
+
+/// <summary>
+/// What the tracker's menu is set to: classify captured time as work, as
+/// leisure, or as defined on the server (the device's
+/// <see cref="TrackingMode"/>). Applies to every event captured from then on,
+/// stamped onto the event itself — so it works offline and is never applied
+/// retroactively. <see cref="Server"/> is first so it's also <c>default</c>.
+/// </summary>
+public enum WorkTypeSetting
+{
+    Server,
+    Work,
+    Leisure,
+}
+
+public static class WorkTypes
+{
+    public static IReadOnlyList<WorkTypeSetting> AllSettings { get; } = [WorkTypeSetting.Work, WorkTypeSetting.Leisure, WorkTypeSetting.Server];
+
+    /// <summary>The wire/file value: "work" or "leisure".</summary>
+    public static string ToWire(WorkType workType) => workType switch
+    {
+        WorkType.Work => "work",
+        WorkType.Leisure => "leisure",
+        _ => throw new ArgumentOutOfRangeException(nameof(workType)),
+    };
+
+    public static WorkType? FromWire(string? wire) => wire switch
+    {
+        "work" => WorkType.Work,
+        "leisure" => WorkType.Leisure,
+        _ => null,
+    };
+
+    /// <summary>What gets stamped on events captured under <paramref name="setting"/>.</summary>
+    public static WorkType? Stamped(WorkTypeSetting setting) => setting switch
+    {
+        WorkTypeSetting.Work => WorkType.Work,
+        WorkTypeSetting.Leisure => WorkType.Leisure,
+        _ => null,
+    };
+
+    /// <summary>The menu entry; <paramref name="serverMode"/> is the device's mode as last reported, null while unknown.</summary>
+    public static string MenuTitle(WorkTypeSetting setting, TrackingMode? serverMode) => setting switch
+    {
+        WorkTypeSetting.Work => "Work",
+        WorkTypeSetting.Leisure => "Leisure",
+        _ => serverMode is { } mode ? $"As defined on server (currently: {TrackingModes.MenuTitle(mode)})" : "As defined on server",
+    };
+}
+
+/// <summary>
+/// Stores a <see cref="WorkTypeSetting"/> as "server"/"work"/"leisure" (the
+/// Mac tracker's spelling), reading a missing or unknown value as
+/// <see cref="WorkTypeSetting.Server"/> instead of throwing — a throw would
+/// make <see cref="ConfigStore.Load"/> fall back to an empty config and
+/// drop the API key.
+/// </summary>
+public sealed class WorkTypeSettingJsonConverter : JsonConverter<WorkTypeSetting>
+{
+    public override WorkTypeSetting Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.String)
+        {
+            reader.Skip();
+            return WorkTypeSetting.Server;
+        }
+        return reader.GetString() switch
+        {
+            "work" => WorkTypeSetting.Work,
+            "leisure" => WorkTypeSetting.Leisure,
+            _ => WorkTypeSetting.Server,
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, WorkTypeSetting value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value switch
+        {
+            WorkTypeSetting.Work => "work",
+            WorkTypeSetting.Leisure => "leisure",
+            _ => "server",
+        });
+}
+
+/// <summary>
+/// Reads this device's own server-side tracking mode via GET
 /// /api/tracker/mode, authenticated with the device's API key. Abstracted so
 /// <see cref="TrackingModeController"/> can be tested without a server.
 /// </summary>
 public interface ITrackingModeApiClient
 {
     Task<TrackingMode> GetTrackingModeAsync(string serverBaseUrl, string apiKey, CancellationToken cancellationToken = default);
-    Task<TrackingMode> SetTrackingModeAsync(TrackingMode mode, string serverBaseUrl, string apiKey, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
-/// The tracker's view of its tracking mode, kept in sync three ways: an
-/// explicit read at startup (<see cref="RefreshAsync"/>), the user switching
-/// it from the tray menu (<see cref="SelectAsync"/>), and the mode the server
-/// reports back on every accepted event batch (<see cref="Report"/>) — which
-/// picks up changes made in the dashboard without any extra polling.
+/// The tracker's view of the device's server-side tracking mode, shown under
+/// "As defined on server" in the tray menu. Kept in sync two ways: an
+/// explicit read at startup (<see cref="RefreshAsync"/>), and the mode the
+/// server reports back on every accepted event batch (<see cref="Report"/>)
+/// — which picks up changes made in the dashboard without any extra polling.
+/// The tracker never changes this mode itself; its own choice is the local
+/// <see cref="WorkTypeSetting"/>.
 /// </summary>
 /// <remarks>
-/// Switches are not queued: if the server can't be reached, the switch fails
-/// visibly and the previous mode stays checked — a switch only means
-/// something at the moment it happens. Thread-safe; the lock is never held
-/// across an await. Kept in sync with the Mac tracker's TrackingModeController.
+/// Thread-safe; the lock is never held across an await. Kept in sync with
+/// the Mac tracker's TrackingModeController.
 /// </remarks>
 public sealed class TrackingModeController
 {
     private readonly ITrackingModeApiClient _client;
-    private readonly Func<DateTimeOffset> _now;
     private readonly object _lock = new();
 
     private TrackingMode? _mode;
-    private bool _isSwitching;
-    private string? _lastError;
-    // Responses to requests that started before the last completed switch
-    // carry the pre-switch mode and must not overwrite it.
-    private DateTimeOffset? _lastSwitchCompletedAt;
 
-    public TrackingModeController(ITrackingModeApiClient client, Func<DateTimeOffset>? now = null)
+    public TrackingModeController(ITrackingModeApiClient client)
     {
         _client = client;
-        _now = now ?? (() => DateTimeOffset.UtcNow);
     }
 
     /// <summary>Null until the mode is known (not configured, or not yet reachable).</summary>
     public TrackingMode? CurrentMode { get { lock (_lock) { return _mode; } } }
 
-    public bool IsSwitching { get { lock (_lock) { return _isSwitching; } } }
-
-    /// <summary>Why the last switch failed, or null.</summary>
-    public string? LastError { get { lock (_lock) { return _lastError; } } }
-
     /// <summary>Forgets everything, e.g. after the server URL or API key changed.</summary>
     public void Reset()
     {
-        lock (_lock)
-        {
-            _mode = null;
-            _isSwitching = false;
-            _lastError = null;
-            _lastSwitchCompletedAt = null;
-        }
+        lock (_lock) { _mode = null; }
     }
 
     public async Task RefreshAsync(string serverBaseUrl, string apiKey)
     {
-        var startedAt = _now();
         try
         {
             var fetched = await _client.GetTrackingModeAsync(serverBaseUrl, apiKey).ConfigureAwait(false);
-            Accept(fetched, startedAt);
+            lock (_lock) { _mode = fetched; }
         }
         catch (Exception ex) when (ex is ApiClientException or HttpRequestException or TaskCanceledException)
         {
@@ -128,53 +204,9 @@ public sealed class TrackingModeController
         }
     }
 
-    /// <summary>Switches the mode on the server. A no-op while another switch is in flight.</summary>
-    public async Task SelectAsync(TrackingMode mode, string serverBaseUrl, string apiKey)
+    /// <summary>The mode the server reported with an accepted event batch.</summary>
+    public void Report(TrackingMode mode)
     {
-        lock (_lock)
-        {
-            if (_isSwitching) return;
-            _isSwitching = true;
-        }
-
-        try
-        {
-            var confirmed = await _client.SetTrackingModeAsync(mode, serverBaseUrl, apiKey).ConfigureAwait(false);
-            lock (_lock)
-            {
-                _mode = confirmed;
-                _lastError = null;
-                _lastSwitchCompletedAt = _now();
-            }
-        }
-        catch (Exception ex) when (ex is ApiClientException or HttpRequestException or TaskCanceledException)
-        {
-            lock (_lock) { _lastError = Describe(ex); }
-        }
-        finally
-        {
-            lock (_lock) { _isSwitching = false; }
-        }
+        lock (_lock) { _mode = mode; }
     }
-
-    /// <summary>The mode the server reported for a request that started at <paramref name="requestStartedAt"/>.</summary>
-    public void Report(TrackingMode mode, DateTimeOffset requestStartedAt) => Accept(mode, requestStartedAt);
-
-    private void Accept(TrackingMode mode, DateTimeOffset requestStartedAt)
-    {
-        lock (_lock)
-        {
-            if (_isSwitching) return;
-            if (_lastSwitchCompletedAt is { } switchedAt && requestStartedAt < switchedAt) return;
-            _mode = mode;
-        }
-    }
-
-    public static string Describe(Exception error) => error switch
-    {
-        ApiClientException { IsUnauthorized: true } => "API key invalid or revoked",
-        ApiClientException { StatusCode: 404 } => "Server doesn't support switching yet (update it)",
-        ApiClientException { StatusCode: > 0 } api => $"Server error (HTTP {api.StatusCode})",
-        _ => "Server unreachable",
-    };
 }

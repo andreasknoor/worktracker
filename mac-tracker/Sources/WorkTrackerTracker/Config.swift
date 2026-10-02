@@ -8,11 +8,32 @@ struct TrackerConfig: Codable, Equatable {
     var serverBaseURL: String
     var apiKey: String
     var pollIntervalSeconds: Int
+    /// How captured time is classified, chosen in the menu (not in the
+    /// settings dialog). Kept across restarts.
+    var workTypeSetting: WorkTypeSetting = .server
 
     static let empty = TrackerConfig(serverBaseURL: "", apiKey: "", pollIntervalSeconds: 30)
 
     var isConfigured: Bool {
         !serverBaseURL.isEmpty && !apiKey.isEmpty
+    }
+}
+
+extension TrackerConfig {
+    private enum CodingKeys: String, CodingKey {
+        case serverBaseURL, apiKey, pollIntervalSeconds, workTypeSetting
+    }
+
+    /// Hand-written so a config file without `workTypeSetting` (written
+    /// before v1.30) or with an unknown value still loads, as `.server`. The
+    /// synthesized decoder would throw instead, and `ConfigStore.load` would
+    /// fall back to `.empty` — dropping the server URL and API key.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        serverBaseURL = try container.decode(String.self, forKey: .serverBaseURL)
+        apiKey = try container.decode(String.self, forKey: .apiKey)
+        pollIntervalSeconds = try container.decode(Int.self, forKey: .pollIntervalSeconds)
+        workTypeSetting = (try? container.decodeIfPresent(WorkTypeSetting.self, forKey: .workTypeSetting)) ?? .server
     }
 }
 

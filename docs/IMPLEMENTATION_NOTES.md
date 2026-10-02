@@ -524,3 +524,41 @@ device tracked the time. It shows what kind of time it was:
 - Verified visually against a local preview server with in-memory synthetic
   data (no Neon load), in both themes, week/month, Totals/Timeline and
   comparison on.
+
+## Choosing the work type in the tracker (v1.30)
+
+Implements `docs/PLAN_TRACKER_LOCAL_WORK_TYPE.md`. Each tracker's menu now
+offers **Work**, **Leisure** and **As defined on server (currently: …)**.
+This replaces the v1.24 submenu that switched the device's server-side mode;
+that mode is now set in the dashboard only.
+
+- **Why per event, not a second history table**: the choice must apply to
+  the moment of capture, and events can sit in the offline queue for days.
+  So the tracker stamps each queued event with its current setting, and the
+  server stores it in the new nullable `activity_events.work_type`
+  (`NULL` = as defined on the server). Migration
+  `scripts/migrations/2026-10-02-event-work-type.mjs` was run against Neon
+  on 2026-10-02 before the deploy (20,172 events, all `NULL`; a re-run is a
+  no-op).
+- **Wire**: `POST /api/events` takes an optional batch-level `workType`; the
+  queues split chunks where it changes. The response's new
+  `acceptsWorkType: true` lets a tracker detect a pre-v1.30 server that
+  silently dropped the field; the menu then shows a warning.
+- **Classification** (core): `workTypeChangesFromEvents` compresses the
+  events into change points, `classifySlices` cuts at them as well as at
+  mode-history changes and prefers a non-null stamped work type. With only
+  `NULL`s the result is identical to v1.29, so existing numbers can't move.
+- **Load**: the work type is only read when classifying, in the same query
+  as the timestamps (`getStamped…` repository methods). Since v1.26 the
+  overview endpoints always classify, so they now read one extra, almost
+  always `NULL`, column per event; no extra round trip.
+- **Trackers** (Mac and Windows, same design, same queue file format with a
+  parallel `workTypes` array): the setting is stored in `config.json`.
+  Both config loaders fall back to an empty config on a decode error, which
+  would drop the API key, so the new field decodes tolerantly (missing or
+  unknown → "as defined on server"). The settings dialog doesn't edit it;
+  saving the dialog keeps the current setting. `TrackingModeController`
+  lost its switching logic (and the stale-response guard that only existed
+  because of it); it now only mirrors the server mode for the menu label.
+- Tests: server 235, Mac 57, Windows `Core` 63. The menus remain manually
+  verified only.

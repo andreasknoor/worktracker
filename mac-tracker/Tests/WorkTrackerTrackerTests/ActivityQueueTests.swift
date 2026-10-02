@@ -7,9 +7,11 @@ private final class FakeEventsAPIClient: EventsAPIClient {
     /// Runs while a request is "in flight", to simulate activity arriving mid-flush.
     var onPost: (() -> Void)?
     private(set) var receivedBatches: [[Date]] = []
+    private(set) var receivedWorkTypes: [WorkType?] = []
 
-    func postEvents(_ timestamps: [Date], serverBaseURL: String, apiKey: String) async throws {
+    func postEvents(_ timestamps: [Date], workType: WorkType?, serverBaseURL: String, apiKey: String) async throws {
         receivedBatches.append(timestamps)
+        receivedWorkTypes.append(workType)
         onPost?()
         if shouldFail {
             throw failure
@@ -303,6 +305,44 @@ final class ActivityQueueTests: XCTestCase {
         queue.enqueue(Date())
         await queue.flush(client: client, serverBaseURL: "https://example.vercel.app", apiKey: "k")
         XCTAssertEqual(queue.currentConsecutiveFailureCount, 1)
+    }
+
+    // MARK: - Work type
+
+    func test_flush_splitsChunksWhereTheWorkTypeChanges() async {
+        let queue = ActivityQueue(storageURL: tempURL, chunkSize: 3, persistDebounceInterval: 0)
+        queue.enqueue(Date(timeIntervalSince1970: 1))
+        queue.enqueue(Date(timeIntervalSince1970: 2))
+        for i in 3...6 { queue.enqueue(Date(timeIntervalSince1970: TimeInterval(i)), workType: .leisure) }
+        queue.enqueue(Date(timeIntervalSince1970: 7), workType: .work)
+        let client = FakeEventsAPIClient()
+
+        await queue.flush(client: client, serverBaseURL: "https://example.vercel.app", apiKey: "k")
+
+        XCTAssertEqual(client.receivedBatches.map(\.count), [2, 3, 1, 1])
+        XCTAssertEqual(client.receivedWorkTypes, [nil, .leisure, .leisure, .work])
+        XCTAssertEqual(queue.pendingCount, 0)
+    }
+
+    func test_workTypes_surviveRestart() {
+        let first = ActivityQueue(storageURL: tempURL, persistDebounceInterval: 0)
+        first.enqueue(Date(timeIntervalSince1970: 1))
+        first.enqueue(Date(timeIntervalSince1970: 2), workType: .work)
+        first.enqueue(Date(timeIntervalSince1970: 3), workType: .leisure)
+
+        let second = ActivityQueue(storageURL: tempURL)
+        XCTAssertEqual(second.pendingEntries.map(\.workType), [nil, .work, .leisure])
+    }
+
+    func test_loadsAQueueFileWrittenBeforeWorkTypesExisted_asServerDefined() throws {
+        try FileManager.default.createDirectory(at: tempURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let json = #"{"pending":["2026-10-01T10:00:00.000Z","2026-10-01T10:00:30.000Z"],"lastSuccessfulSyncAt":null}"#
+        try Data(json.utf8).write(to: tempURL)
+
+        let queue = ActivityQueue(storageURL: tempURL)
+
+        XCTAssertEqual(queue.pendingCount, 2)
+        XCTAssertEqual(queue.pendingEntries.map(\.workType), [nil, nil])
     }
 
     // MARK: - Outage resilience

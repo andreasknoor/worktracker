@@ -20,6 +20,11 @@ internal sealed class TrackerTrayApplicationContext : ApplicationContext
     private IdleMonitor? _idleMonitor;
     private System.Windows.Forms.Timer? _flushTimer;
 
+    // Set when a server answered a batch carrying a work type without
+    // acceptsWorkType (pre-v1.30), i.e. silently ignored it. Written from a
+    // pool thread, read on the UI thread.
+    private volatile bool _serverIgnoresWorkType;
+
     public TrackerTrayApplicationContext()
     {
         _queueFilePath = Path.Combine(Path.GetDirectoryName(_configFilePath)!, "queue.json");
@@ -31,11 +36,13 @@ internal sealed class TrackerTrayApplicationContext : ApplicationContext
         // Every accepted event batch reports the device's current mode (e.g.
         // after a change in the dashboard). Raised on a pool thread, so only
         // the controller is touched here; the menu refreshes after each flush.
-        _apiClient.TrackingModeReported = (mode, startedAt) => _trackingMode.Report(mode, startedAt);
+        _apiClient.TrackingModeReported = mode => _trackingMode.Report(mode);
+        _apiClient.WorkTypeSupportReported = supported => _serverIgnoresWorkType = !supported;
 
         _trayIcon = new TrayIconController(_config);
-        _trayIcon.SettingsSaved += ApplyConfig;
-        _trayIcon.TrackingModeSelected += mode => _ = SelectTrackingModeAsync(mode);
+        // The settings dialog doesn't edit the work type setting.
+        _trayIcon.SettingsSaved += newConfig => ApplyConfig(newConfig with { WorkTypeSetting = _config.WorkTypeSetting });
+        _trayIcon.WorkTypeSettingSelected += SelectWorkTypeSetting;
 
         ApplyConfig(_config);
     }
@@ -55,6 +62,7 @@ internal sealed class TrackerTrayApplicationContext : ApplicationContext
 
         // The server URL or API key may have changed, i.e. a different device.
         _trackingMode.Reset();
+        _serverIgnoresWorkType = false;
         UpdateTrackingModeMenu();
 
         if (!_config.IsConfigured)
@@ -88,20 +96,24 @@ internal sealed class TrackerTrayApplicationContext : ApplicationContext
         UpdateTrackingModeMenu();
     }
 
-    private async Task SelectTrackingModeAsync(TrackingMode mode)
+    // Purely local and instant: events captured from now on are stamped with
+    // the new setting, nothing already queued changes.
+    private void SelectWorkTypeSetting(WorkTypeSetting setting)
     {
-        if (!_config.IsConfigured) return;
-        _trayIcon.UpdateTrackingMode(_trackingMode.CurrentMode, isSwitching: true, error: null);
-        await _trackingMode.SelectAsync(mode, _config.ServerBaseUrl, _config.ApiKey);
+        _config = _config with { WorkTypeSetting = setting };
+        ConfigStore.Save(_config, _configFilePath);
         UpdateTrackingModeMenu();
     }
 
     private void UpdateTrackingModeMenu() =>
-        _trayIcon.UpdateTrackingMode(_trackingMode.CurrentMode, _trackingMode.IsSwitching, _trackingMode.LastError);
+        _trayIcon.UpdateTrackingMode(
+            _config.WorkTypeSetting,
+            _trackingMode.CurrentMode,
+            _serverIgnoresWorkType && _config.WorkTypeSetting != WorkTypeSetting.Server);
 
     private void RecordActivity()
     {
-        _activityQueue.Enqueue(DateTimeOffset.UtcNow);
+        _activityQueue.Enqueue(DateTimeOffset.UtcNow, WorkTypes.Stamped(_config.WorkTypeSetting));
         UpdateTray(isActive: true);
     }
 

@@ -9,6 +9,10 @@ namespace WorkTrackerTracker.Core;
 /// disk so a network blip (or the tracker quitting) doesn't lose events —
 /// see docs/API_CONTRACT.md's note on why batched event posting exists.
 /// Only entries the server has actually accepted are ever removed.
+/// Each entry carries the work type selected in the menu when it was
+/// captured (null: "as defined on the server"), since it may be sent much
+/// later. A request only ever carries one work type, so a chunk ends where
+/// the work type changes.
 /// </summary>
 /// <remarks>
 /// Behavior during a sustained server outage (kept in sync with the Mac
@@ -55,7 +59,7 @@ public sealed class ActivityQueue
     private readonly TimeSpan _maxBackoff;
     private readonly TimeSpan _persistDebounce;
 
-    private List<DateTimeOffset> _pending;
+    private List<QueueEntry> _pending;
     private long _headSequence; // sequence number of _pending[0]
     private DateTimeOffset? _lastPersistedAt;
     private bool _hasUnpersistedChanges;
@@ -91,7 +95,9 @@ public sealed class ActivityQueue
     public int PendingCount { get { lock (_lock) return _pending.Count; } }
 
     /// <summary>Snapshot of the queued timestamps; exposed for tests.</summary>
-    public IReadOnlyList<DateTimeOffset> PendingTimestamps { get { lock (_lock) return _pending.ToArray(); } }
+    public IReadOnlyList<DateTimeOffset> PendingTimestamps { get { lock (_lock) return _pending.Select(e => e.Timestamp).ToArray(); } }
+
+    public IReadOnlyList<QueueEntry> PendingEntries { get { lock (_lock) return _pending.ToArray(); } }
 
     /// <summary>
     /// When the last batch was actually accepted by the server — not just
@@ -108,11 +114,11 @@ public sealed class ActivityQueue
     /// <summary>Consecutive failed flushes since the last success; exposed for tests.</summary>
     public int ConsecutiveFailureCount { get { lock (_lock) return _consecutiveFailureCount; } }
 
-    public void Enqueue(DateTimeOffset timestamp)
+    public void Enqueue(DateTimeOffset timestamp, WorkType? workType = null)
     {
         lock (_lock)
         {
-            _pending.Add(timestamp);
+            _pending.Add(new QueueEntry(timestamp, workType));
             if (_pending.Count > _maxPendingCount)
             {
                 var overflow = _pending.Count - _maxPendingCount;
@@ -144,7 +150,7 @@ public sealed class ActivityQueue
             {
                 try
                 {
-                    await client.PostEventsAsync(chunk.Timestamps, serverBaseUrl, apiKey, cancellationToken).ConfigureAwait(false);
+                    await client.PostEventsAsync(chunk.Timestamps, chunk.WorkType, serverBaseUrl, apiKey, cancellationToken).ConfigureAwait(false);
                     CompleteChunk(chunk.EndSequence, rejected: false);
                 }
                 catch (ApiClientException ex) when (ex.IsPermanentRejection)
@@ -178,13 +184,15 @@ public sealed class ActivityQueue
         }
     }
 
-    private (DateTimeOffset[] Timestamps, long EndSequence)? NextChunk()
+    /// <summary>The longest prefix of at most <c>chunkSize</c> entries that share one work type.</summary>
+    private (DateTimeOffset[] Timestamps, WorkType? WorkType, long EndSequence)? NextChunk()
     {
         lock (_lock)
         {
             if (_pending.Count == 0) return null;
-            var chunk = _pending.Take(_chunkSize).ToArray();
-            return (chunk, _headSequence + chunk.Length);
+            var workType = _pending[0].WorkType;
+            var chunk = _pending.Take(_chunkSize).TakeWhile(e => e.WorkType == workType).Select(e => e.Timestamp).ToArray();
+            return (chunk, workType, _headSequence + chunk.Length);
         }
     }
 
@@ -276,7 +284,8 @@ public sealed class ActivityQueue
 
             var state = new PersistedState
             {
-                Pending = _pending.Select(FormatIso8601).ToArray(),
+                Pending = _pending.Select(e => FormatIso8601(e.Timestamp)).ToArray(),
+                WorkTypes = _pending.Select(e => e.WorkType is { } w ? Core.WorkTypes.ToWire(w) : null).ToArray(),
                 LastSuccessfulSyncAt = _lastSuccessfulSyncAt is { } syncAt ? FormatIso8601(syncAt) : null,
             };
             var tempPath = _storagePath + ".tmp";
@@ -293,11 +302,11 @@ public sealed class ActivityQueue
     private static string FormatIso8601(DateTimeOffset timestamp) =>
         timestamp.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
 
-    private static (List<DateTimeOffset> Pending, DateTimeOffset? LastSuccessfulSyncAt) Load(string path)
+    private static (List<QueueEntry> Pending, DateTimeOffset? LastSuccessfulSyncAt) Load(string path)
     {
         if (!File.Exists(path))
         {
-            return (new List<DateTimeOffset>(), null);
+            return (new List<QueueEntry>(), null);
         }
 
         string json;
@@ -310,7 +319,7 @@ public sealed class ActivityQueue
             // Unreadable right now (e.g. locked): start empty but leave the
             // file alone — the next successful persist replaces it, and we
             // must not treat this as corruption.
-            return (new List<DateTimeOffset>(), null);
+            return (new List<QueueEntry>(), null);
         }
 
         try
@@ -318,7 +327,11 @@ public sealed class ActivityQueue
             var state = JsonSerializer.Deserialize<PersistedState>(json);
             if (state is not null)
             {
-                var pending = ParseTimestamps(state.Pending);
+                // Files written before v1.30 have no workTypes; their entries
+                // load as null, which is correct (captured "as defined on
+                // the server").
+                var workTypes = state.WorkTypes?.Length == state.Pending.Length ? state.WorkTypes : null;
+                var pending = ParseEntries(state.Pending, workTypes);
                 var lastSync = state.LastSuccessfulSyncAt is { } s && DateTimeOffset.TryParse(s, null, DateTimeStyles.RoundtripKind, out var dt)
                     ? dt
                     : (DateTimeOffset?)null;
@@ -336,12 +349,12 @@ public sealed class ActivityQueue
             // (no LastSuccessfulSyncAt yet) — fall back to that shape so
             // upgrading doesn't drop an existing queue.
             var iso = JsonSerializer.Deserialize<string[]>(json) ?? Array.Empty<string>();
-            return (ParseTimestamps(iso), null);
+            return (ParseEntries(iso, null), null);
         }
         catch (JsonException)
         {
             Quarantine(path);
-            return (new List<DateTimeOffset>(), null);
+            return (new List<QueueEntry>(), null);
         }
     }
 
@@ -358,11 +371,13 @@ public sealed class ActivityQueue
         }
     }
 
-    private static List<DateTimeOffset> ParseTimestamps(IEnumerable<string> iso) =>
+    private static List<QueueEntry> ParseEntries(string[] iso, string?[]? workTypes) =>
         iso
-            .Select(s => DateTimeOffset.TryParse(s, null, DateTimeStyles.RoundtripKind, out var dt) ? dt : (DateTimeOffset?)null)
-            .Where(dt => dt.HasValue)
-            .Select(dt => dt!.Value)
+            .Select((s, i) => DateTimeOffset.TryParse(s, null, DateTimeStyles.RoundtripKind, out var dt)
+                ? new QueueEntry(dt, Core.WorkTypes.FromWire(workTypes?[i]))
+                : (QueueEntry?)null)
+            .Where(e => e.HasValue)
+            .Select(e => e!.Value)
             .ToList();
 
     private sealed class PersistedState
@@ -370,7 +385,14 @@ public sealed class ActivityQueue
         [JsonPropertyName("pending")]
         public string[] Pending { get; set; } = Array.Empty<string>();
 
+        /// <summary>Parallel to <see cref="Pending"/>: "work", "leisure", or null.</summary>
+        [JsonPropertyName("workTypes")]
+        public string?[]? WorkTypes { get; set; }
+
         [JsonPropertyName("lastSuccessfulSyncAt")]
         public string? LastSuccessfulSyncAt { get; set; }
     }
 }
+
+/// <summary>One captured activity timestamp and the work type it was captured under.</summary>
+public readonly record struct QueueEntry(DateTimeOffset Timestamp, WorkType? WorkType);

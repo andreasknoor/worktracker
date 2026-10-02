@@ -1,7 +1,7 @@
 import AppKit
 
 /// Owns the menu-bar icon and its dropdown: a live status line, a pending
-/// (not-yet-synced) event count, the work/leisure tracking-mode switch, a
+/// (not-yet-synced) event count, the work/leisure tracking-mode choice, a
 /// settings dialog, and Quit. All actual tracking logic lives in
 /// `IdleMonitor` / `ActivityQueue` / `TrackingModeController`; this is just
 /// the UI shell around them.
@@ -13,9 +13,9 @@ final class StatusBarController {
     private let errorMenuItem: NSMenuItem
     private let trackingModeMenuItem: NSMenuItem
     private let trackingModeErrorMenuItem: NSMenuItem
-    private var trackingModeItems: [TrackingMode: NSMenuItem] = [:]
+    private var trackingModeItems: [WorkTypeSetting: NSMenuItem] = [:]
     var onSettingsSaved: ((TrackerConfig) -> Void)?
-    var onTrackingModeSelected: ((TrackingMode) -> Void)?
+    var onWorkTypeSettingSelected: ((WorkTypeSetting) -> Void)?
 
     private var currentConfig: TrackerConfig
     private var settingsWindowController: SettingsWindowController?
@@ -57,18 +57,20 @@ final class StatusBarController {
         menu.addItem(.separator())
 
         let trackingModeMenu = NSMenu()
-        for mode in TrackingMode.allCases {
-            let item = NSMenuItem(title: mode.menuTitle, action: #selector(selectTrackingMode(_:)), keyEquivalent: "")
+        for setting in WorkTypeSetting.allCases {
+            let item = NSMenuItem(
+                title: setting.menuTitle(serverMode: nil), action: #selector(selectWorkTypeSetting(_:)), keyEquivalent: ""
+            )
             item.target = self
-            item.representedObject = mode.rawValue
+            item.representedObject = setting.rawValue
             trackingModeMenu.addItem(item)
-            trackingModeItems[mode] = item
+            trackingModeItems[setting] = item
         }
         trackingModeMenu.addItem(.separator())
         let trackingModeHint = NSMenuItem(title: "Applies from now on", action: nil, keyEquivalent: "")
         trackingModeHint.isEnabled = false
         trackingModeMenu.addItem(trackingModeHint)
-        // Item enablement is driven by `updateTrackingMode`, not by AppKit.
+        // The disabled hint stays disabled; AppKit would enable it otherwise.
         trackingModeMenu.autoenablesItems = false
         trackingModeMenuItem.submenu = trackingModeMenu
         menu.addItem(trackingModeMenuItem)
@@ -85,25 +87,25 @@ final class StatusBarController {
         statusItem.menu = menu
 
         update(isActive: false, pendingCount: 0)
-        updateTrackingMode(nil, isSwitching: false, error: nil)
+        updateTrackingMode(initialConfig.workTypeSetting, serverMode: nil, serverIgnoresWorkType: false)
     }
 
-    /// Checks the current mode (none while unknown) and disables switching
-    /// while unconfigured or while a switch is in flight.
-    func updateTrackingMode(_ mode: TrackingMode?, isSwitching: Bool, error: String?) {
-        let label = mode.map { "Tracking mode: \($0.menuTitle)" } ?? "Tracking mode"
-        trackingModeMenuItem.title = isSwitching ? "\(label) (switching…)" : label
-        for (itemMode, item) in trackingModeItems {
-            item.state = itemMode == mode ? .on : .off
-            item.isEnabled = currentConfig.isConfigured && !isSwitching
+    /// Checks the selected setting. `serverMode` (nil while unknown) is shown
+    /// next to "As defined on server". `serverIgnoresWorkType` shows a
+    /// warning that a pre-v1.30 server dropped the work type.
+    func updateTrackingMode(_ setting: WorkTypeSetting, serverMode: TrackingMode?, serverIgnoresWorkType: Bool) {
+        trackingModeMenuItem.title = "Tracking mode: \(setting.menuTitle(serverMode: serverMode))"
+        for (itemSetting, item) in trackingModeItems {
+            item.title = itemSetting.menuTitle(serverMode: serverMode)
+            item.state = itemSetting == setting ? .on : .off
         }
-        trackingModeErrorMenuItem.title = error.map { "⚠︎ Couldn't switch mode: \($0)" } ?? ""
-        trackingModeErrorMenuItem.isHidden = error == nil
+        trackingModeErrorMenuItem.title = "⚠︎ Server ignores the tracking mode (update the server)"
+        trackingModeErrorMenuItem.isHidden = !serverIgnoresWorkType
     }
 
-    @objc private func selectTrackingMode(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let mode = TrackingMode(rawValue: raw) else { return }
-        onTrackingModeSelected?(mode)
+    @objc private func selectWorkTypeSetting(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let setting = WorkTypeSetting(rawValue: raw) else { return }
+        onWorkTypeSettingSelected?(setting)
     }
 
     func update(isActive: Bool, pendingCount: Int, lastSuccessfulSyncAt: Date? = nil, lastError: String? = nil) {

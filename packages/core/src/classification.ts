@@ -1,5 +1,5 @@
 import { classifyDay, type DateKey } from "./time.js";
-import type { Timestamp, TrackingMode, TrackingModeChange, WorkSession, WorkType } from "./types.js";
+import type { StampedEvent, Timestamp, TrackingMode, TrackingModeChange, WorkSession, WorkType, WorkTypeChange } from "./types.js";
 
 export type DaySlice = WorkSession & { date: DateKey };
 export type ClassifiedSlice = DaySlice & { workType: WorkType };
@@ -48,22 +48,62 @@ export function splitAtInstants<T extends WorkSession>(slices: readonly T[], ins
 }
 
 /**
- * Classifies a device's day-slices (see `splitByDay`) as work or leisure
- * using the tracking mode that was in effect *when the activity happened*:
- * slices are additionally cut at every mode change, and each piece is
- * classified by `classifyDay(date, modeAtPieceStart)`. With an empty
- * history this is exactly `classifyDay(date, fallback)` per slice — the
- * pre-history behavior.
+ * Compresses a device's events into the points where the work type its
+ * tracker stamped on them changes: one at the first event, then one at the
+ * first event of every run with a different value. Events need not be
+ * sorted. Empty input yields no changes.
+ */
+export function workTypeChangesFromEvents(events: readonly StampedEvent[]): WorkTypeChange[] {
+  const sorted = [...events].sort((a, b) => a.timestamp - b.timestamp);
+  const changes: WorkTypeChange[] = [];
+  for (const event of sorted) {
+    const last = changes[changes.length - 1];
+    if (!last || last.workType !== event.workType) {
+      changes.push({ effectiveFrom: event.timestamp, workType: event.workType });
+    }
+  }
+  return changes;
+}
+
+/**
+ * The work type stamped by the tracker at instant `t`, given change points
+ * sorted ascending by `effectiveFrom`, or `null` ("as defined on the
+ * server") before the first change and without any.
+ */
+export function workTypeAt(changes: readonly WorkTypeChange[], t: Timestamp): WorkType | null {
+  let workType: WorkType | null = null;
+  for (const change of changes) {
+    if (change.effectiveFrom > t) break;
+    workType = change.workType;
+  }
+  return workType;
+}
+
+/**
+ * Classifies a device's day-slices (see `splitByDay`) as work or leisure.
+ * Two sources decide, both by their value *when the activity happened*:
+ *  - the work type the tracker stamped on its events (`workTypeChanges`,
+ *    see `workTypeChangesFromEvents`), if it isn't `null`;
+ *  - otherwise the device's tracking mode at the time (`history`), via
+ *    `classifyDay(date, modeAtPieceStart)`.
+ * Slices are cut at every change of either source, and each piece is
+ * classified by the values at its start. With an empty history and no work
+ * type changes this is exactly `classifyDay(date, fallback)` per slice —
+ * the pre-history behavior.
  */
 export function classifySlices(
   slices: readonly DaySlice[],
   history: readonly TrackingModeChange[],
   fallback: TrackingMode,
+  workTypeChanges: readonly WorkTypeChange[] = [],
 ): ClassifiedSlice[] {
   const sortedHistory = [...history].sort((a, b) => a.effectiveFrom - b.effectiveFrom); // stable: ties keep input order
-  return splitAtInstants(slices, sortedHistory.map((c) => c.effectiveFrom)).map((piece) => ({
+  const sortedWorkTypes = [...workTypeChanges].sort((a, b) => a.effectiveFrom - b.effectiveFrom);
+  const instants = [...sortedHistory, ...sortedWorkTypes].map((c) => c.effectiveFrom);
+  return splitAtInstants(slices, instants).map((piece) => ({
     ...piece,
-    workType: classifyDay(piece.date, trackingModeAt(sortedHistory, piece.start, fallback)),
+    workType:
+      workTypeAt(sortedWorkTypes, piece.start) ?? classifyDay(piece.date, trackingModeAt(sortedHistory, piece.start, fallback)),
   }));
 }
 

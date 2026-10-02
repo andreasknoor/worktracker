@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { classifySlices, mergeClassifiedSessions, splitAtInstants, trackingModeAt } from "../src/classification.js";
+import {
+  classifySlices,
+  mergeClassifiedSessions,
+  splitAtInstants,
+  trackingModeAt,
+  workTypeAt,
+  workTypeChangesFromEvents,
+} from "../src/classification.js";
 import { mergeSessions } from "../src/sessionCalculator.js";
 import { splitByDay } from "../src/statistics.js";
 import { classifyDay } from "../src/time.js";
-import type { TrackingModeChange, WorkSession } from "../src/types.js";
+import type { TrackingModeChange, WorkSession, WorkTypeChange } from "../src/types.js";
 
 const HOUR = 3_600_000;
 const BERLIN = "Europe/Berlin";
@@ -145,6 +152,120 @@ describe("classifySlices", () => {
       // auto on a Sunday is leisure, too
       { date: "2026-03-29", start: sundayLocalMidnight + 2 * HOUR, end: sundayLocalMidnight + 4 * HOUR, workType: "leisure" },
     ]);
+  });
+});
+
+describe("workTypeChangesFromEvents", () => {
+  it("yields nothing for no events", () => {
+    expect(workTypeChangesFromEvents([])).toEqual([]);
+  });
+
+  it("keeps the first event and the first event of every differing run", () => {
+    expect(
+      workTypeChangesFromEvents([
+        { timestamp: 10, workType: null },
+        { timestamp: 20, workType: null },
+        { timestamp: 30, workType: "leisure" },
+        { timestamp: 40, workType: "leisure" },
+        { timestamp: 50, workType: "work" },
+        { timestamp: 60, workType: null },
+      ]),
+    ).toEqual([
+      { effectiveFrom: 10, workType: null },
+      { effectiveFrom: 30, workType: "leisure" },
+      { effectiveFrom: 50, workType: "work" },
+      { effectiveFrom: 60, workType: null },
+    ]);
+  });
+
+  it("sorts unsorted events first", () => {
+    expect(
+      workTypeChangesFromEvents([
+        { timestamp: 30, workType: "work" },
+        { timestamp: 10, workType: null },
+        { timestamp: 20, workType: null },
+      ]),
+    ).toEqual([
+      { effectiveFrom: 10, workType: null },
+      { effectiveFrom: 30, workType: "work" },
+    ]);
+  });
+});
+
+describe("workTypeAt", () => {
+  const changes: WorkTypeChange[] = [
+    { effectiveFrom: 100, workType: "work" },
+    { effectiveFrom: 200, workType: null },
+  ];
+
+  it("is null without changes and before the first change", () => {
+    expect(workTypeAt([], 150)).toBeNull();
+    expect(workTypeAt(changes, 99)).toBeNull();
+  });
+
+  it("switches exactly at effectiveFrom", () => {
+    expect(workTypeAt(changes, 100)).toBe("work");
+    expect(workTypeAt(changes, 199)).toBe("work");
+    expect(workTypeAt(changes, 200)).toBeNull();
+  });
+});
+
+describe("classifySlices with work types stamped by the tracker", () => {
+  function workTypes(sessions: WorkSession[], history: TrackingModeChange[], changes: WorkTypeChange[]) {
+    return classifySlices(splitByDay(sessions, "UTC"), history, "auto", changes).map(({ start, end, workType }) => ({
+      start,
+      end,
+      workType,
+    }));
+  }
+
+  it("with only null work types equals the history-based classification", () => {
+    const sessions = [{ start: MON + 9 * HOUR, end: MON + 12 * HOUR }, { start: SAT + 9 * HOUR, end: SAT + 10 * HOUR }];
+    const history: TrackingModeChange[] = [
+      { effectiveFrom: 0, mode: "auto" },
+      { effectiveFrom: MON + 10 * HOUR, mode: "alwaysLeisure" },
+    ];
+    const changes: WorkTypeChange[] = [{ effectiveFrom: MON + 9 * HOUR, workType: null }];
+    expect(workTypes(sessions, history, changes)).toEqual(workTypes(sessions, history, []));
+  });
+
+  it("a stamped work type wins over the device's mode, whatever it is", () => {
+    const sessions = [{ start: SAT + 9 * HOUR, end: SAT + 10 * HOUR }, { start: MON + 9 * HOUR, end: MON + 10 * HOUR }];
+    expect(
+      workTypes(sessions, [{ effectiveFrom: 0, mode: "alwaysLeisure" }], [{ effectiveFrom: 0, workType: "work" }]).map((s) => s.workType),
+    ).toEqual(["work", "work"]);
+    expect(
+      workTypes(sessions, [{ effectiveFrom: 0, mode: "alwaysWork" }], [{ effectiveFrom: 0, workType: "leisure" }]).map((s) => s.workType),
+    ).toEqual(["leisure", "leisure"]);
+  });
+
+  it("splits a session where the tracker switches, and falls back to the device's mode on null", () => {
+    // Monday, device on auto (= work): server, then leisure, then server again.
+    const sessions = [{ start: MON + 9 * HOUR, end: MON + 12 * HOUR }];
+    const changes: WorkTypeChange[] = [
+      { effectiveFrom: MON + 9 * HOUR, workType: null },
+      { effectiveFrom: MON + 10 * HOUR, workType: "leisure" },
+      { effectiveFrom: MON + 11 * HOUR, workType: null },
+    ];
+    expect(workTypes(sessions, [{ effectiveFrom: 0, mode: "auto" }], changes)).toEqual([
+      { start: MON + 9 * HOUR, end: MON + 10 * HOUR, workType: "work" },
+      { start: MON + 10 * HOUR, end: MON + 11 * HOUR, workType: "leisure" },
+      { start: MON + 11 * HOUR, end: MON + 12 * HOUR, workType: "work" },
+    ]);
+  });
+
+  it("cuts at both sources: a device mode change while the tracker is on null", () => {
+    const sessions = [{ start: MON + 9 * HOUR, end: MON + 13 * HOUR }];
+    const history: TrackingModeChange[] = [
+      { effectiveFrom: 0, mode: "auto" },
+      { effectiveFrom: MON + 10 * HOUR, mode: "alwaysLeisure" },
+    ];
+    const changes: WorkTypeChange[] = [
+      { effectiveFrom: MON + 9 * HOUR, workType: null },
+      { effectiveFrom: MON + 11 * HOUR, workType: "work" },
+      { effectiveFrom: MON + 12 * HOUR, workType: null },
+    ];
+    expect(workTypes(sessions, history, changes).map((s) => s.workType)).toEqual(["work", "leisure", "work", "leisure"]);
   });
 });
 

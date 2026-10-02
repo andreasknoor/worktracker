@@ -9,10 +9,12 @@ file sealed class FakeEventsApiClient : IEventsApiClient
     /// <summary>Runs while a request is "in flight", to simulate activity arriving mid-flush.</summary>
     public Action? OnPost { get; set; }
     public List<IReadOnlyList<DateTimeOffset>> ReceivedBatches { get; } = new();
+    public List<WorkType?> ReceivedWorkTypes { get; } = new();
 
-    public Task PostEventsAsync(IReadOnlyList<DateTimeOffset> timestamps, string serverBaseUrl, string apiKey, CancellationToken cancellationToken = default)
+    public Task PostEventsAsync(IReadOnlyList<DateTimeOffset> timestamps, WorkType? workType, string serverBaseUrl, string apiKey, CancellationToken cancellationToken = default)
     {
         ReceivedBatches.Add(timestamps.ToArray());
+        ReceivedWorkTypes.Add(workType);
         OnPost?.Invoke();
         if (ShouldFail)
         {
@@ -358,6 +360,49 @@ public sealed class ActivityQueueTests : IDisposable
         Assert.Equal("{not json", File.ReadAllText(_tempFile + ".corrupt"));
     }
 
+    // ---- Work type ----
+
+    [Fact]
+    public async Task Flush_SplitsChunksWhereTheWorkTypeChanges()
+    {
+        var queue = new ActivityQueue(_tempFile, chunkSize: 3, persistDebounce: TimeSpan.Zero);
+        queue.Enqueue(T(1));
+        queue.Enqueue(T(2));
+        for (var i = 3; i <= 6; i++) queue.Enqueue(T(i), WorkType.Leisure);
+        queue.Enqueue(T(7), WorkType.Work);
+        var client = new FakeEventsApiClient();
+
+        await queue.FlushAsync(client, Url, "k");
+
+        Assert.Equal(new[] { 2, 3, 1, 1 }, client.ReceivedBatches.Select(b => b.Count));
+        Assert.Equal(new WorkType?[] { null, WorkType.Leisure, WorkType.Leisure, WorkType.Work }, client.ReceivedWorkTypes);
+        Assert.Equal(0, queue.PendingCount);
+    }
+
+    [Fact]
+    public void WorkTypes_SurviveRestart()
+    {
+        var first = new ActivityQueue(_tempFile, persistDebounce: TimeSpan.Zero);
+        first.Enqueue(T(1));
+        first.Enqueue(T(2), WorkType.Work);
+        first.Enqueue(T(3), WorkType.Leisure);
+
+        var second = new ActivityQueue(_tempFile);
+        Assert.Equal(new WorkType?[] { null, WorkType.Work, WorkType.Leisure }, second.PendingEntries.Select(e => e.WorkType));
+    }
+
+    [Fact]
+    public void LoadsAQueueFileWrittenByTheMacTracker()
+    {
+        // Same file format on both platforms.
+        Directory.CreateDirectory(Path.GetDirectoryName(_tempFile)!);
+        File.WriteAllText(_tempFile, """{"pending":["2026-10-01T10:00:00.000Z","2026-10-01T10:00:30.000Z"],"workTypes":[null,"leisure"]}""");
+
+        var queue = new ActivityQueue(_tempFile);
+
+        Assert.Equal(new WorkType?[] { null, WorkType.Leisure }, queue.PendingEntries.Select(e => e.WorkType));
+    }
+
     // ---- Backward compatibility with queue files written by the previous version ----
 
     [Fact]
@@ -372,6 +417,7 @@ public sealed class ActivityQueueTests : IDisposable
         var queue = new ActivityQueue(_tempFile);
         Assert.Equal(3000, queue.PendingCount);
         Assert.NotNull(queue.LastSuccessfulSyncAt);
+        Assert.All(queue.PendingEntries, e => Assert.Null(e.WorkType));
 
         var client = new FakeEventsApiClient();
         await queue.FlushAsync(client, Url, "k");

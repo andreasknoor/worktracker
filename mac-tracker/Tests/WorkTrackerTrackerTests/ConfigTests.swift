@@ -32,6 +32,38 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(loaded, saved)
     }
 
+    func test_workTypeSetting_defaultsToServer_andRoundTrips() throws {
+        var saved = TrackerConfig(serverBaseURL: "https://x.example", apiKey: "wtk_live_x", pollIntervalSeconds: 30)
+        XCTAssertEqual(saved.workTypeSetting, .server)
+
+        saved.workTypeSetting = .leisure
+        try ConfigStore.save(saved, to: tempURL)
+        XCTAssertEqual(ConfigStore.load(from: tempURL).workTypeSetting, .leisure)
+    }
+
+    func test_load_aConfigWrittenBeforeWorkTypeSettingExisted_keepsTheApiKey() throws {
+        try FileManager.default.createDirectory(at: tempURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let json = #"{"serverBaseURL":"https://x.example","apiKey":"wtk_live_x","pollIntervalSeconds":45}"#
+        try Data(json.utf8).write(to: tempURL)
+
+        let loaded = ConfigStore.load(from: tempURL)
+
+        XCTAssertEqual(loaded.apiKey, "wtk_live_x")
+        XCTAssertEqual(loaded.pollIntervalSeconds, 45)
+        XCTAssertEqual(loaded.workTypeSetting, .server)
+    }
+
+    func test_load_anUnknownWorkTypeSetting_fallsBackToServer() throws {
+        try FileManager.default.createDirectory(at: tempURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let json = #"{"serverBaseURL":"https://x.example","apiKey":"wtk_live_x","pollIntervalSeconds":30,"workTypeSetting":"sometimes"}"#
+        try Data(json.utf8).write(to: tempURL)
+
+        let loaded = ConfigStore.load(from: tempURL)
+
+        XCTAssertEqual(loaded.apiKey, "wtk_live_x")
+        XCTAssertEqual(loaded.workTypeSetting, .server)
+    }
+
     func test_save_createsIntermediateDirectories() throws {
         try ConfigStore.save(.empty, to: tempURL)
 

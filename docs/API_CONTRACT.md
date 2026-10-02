@@ -164,17 +164,25 @@ or a small batch (recommended, so a tracker can flush a short local queue after 
 ```json
 { "timestamps": ["2026-03-11T09:02:15.123Z", "2026-03-11T09:02:45.400Z"] }
 ```
+Optionally with the work type all of these events were captured under (v1.30), as chosen in the tracker's menu:
+```json
+{ "timestamps": ["2026-03-11T09:02:15.123Z"], "workType": "leisure" }
+```
+- `workType`: `"work"`, `"leisure"`, or missing/`null` for "as defined on the server" (the device's tracking mode decides, see "Work/leisure filtering"). Anything else is `400`. Stored per event (`activity_events.work_type`), because a tracker may send events long after capturing them. One work type per request; trackers split their batches where it changes.
 - `401` if the API key is missing/invalid/revoked.
 - `400` if the batch exceeds 5000 timestamps in one request, or if none of the provided timestamps parse.
-- Ingestion is idempotent: `activity_events` has a unique index on `(device_id, timestamp_utc)` and inserts use `ON CONFLICT DO NOTHING`, so a tracker re-sending a batch after a timeout or partial failure creates no duplicates. **The migration `scripts/migrations/2026-09-19-unique-activity-events.mjs` must be run before deploying code that relies on this**, otherwise `ON CONFLICT` fails with a 500.
+- Ingestion is idempotent: `activity_events` has a unique index on `(device_id, timestamp_utc)` and inserts use `ON CONFLICT DO NOTHING`, so a tracker re-sending a batch after a timeout or partial failure creates no duplicates (and the first stored `workType` stays). **The migration `scripts/migrations/2026-09-19-unique-activity-events.mjs` must be run before deploying code that relies on this**, otherwise `ON CONFLICT` fails with a 500.
 - Trackers send at most 1000 timestamps per request (chunked), retry 5xx/network/401 with exponential backoff, and drop a chunk only on 400/413/422.
 - Server resolves the key to a `device_id`, inserts one row per timestamp into `activity_events`, and updates that device's `last_seen_at`.
-- `201` with `{ "trackingMode": "auto" | "alwaysWork" | "alwaysLeisure" }`: the device's current tracking mode, so a tracker learns about a change made in the dashboard within one flush interval without polling (the device row is already loaded for authentication — no extra query). Servers before v1.24 answered with an empty body; trackers accept both.
+- `201` with `{ "trackingMode": "auto" | "alwaysWork" | "alwaysLeisure", "acceptsWorkType": true }`: the device's current tracking mode, so a tracker learns about a change made in the dashboard within one flush interval without polling (the device row is already loaded for authentication — no extra query). Servers before v1.24 answered with an empty body; trackers accept both. `acceptsWorkType` (v1.30) tells a tracker its `workType` was stored; a tracker that sent one and doesn't see the flag is talking to an older server that silently ignored it, and says so in its menu.
 
 ## Tracker self-service (device API key)
 
 Trackers can read and switch their **own** tracking mode — nothing else, and
-no other device (there's no device id in these routes). Authenticated like
+no other device (there's no device id in these routes). Since v1.30 the
+trackers only read it (to show it under "As defined on server"); their own
+choice of work type travels with the events instead (see `POST
+/api/events`). `PUT` stays for compatibility. Authenticated like
 `/api/events` (`Authorization: Bearer <device-api-key>`; `401` if missing,
 invalid or revoked); a dashboard session cookie is **not** accepted. The
 `/api/tracker` prefix deliberately lies outside every dashboard-gated prefix.
@@ -260,15 +268,25 @@ additionally accept `?workType=work|leisure|all` (default `all`; `400` on an
 unrecognized value). `dayType` and `workType` can be combined — they're
 applied independently, not as alternatives.
 
-Classification is per device, per calendar day, via the `trackingMode` each
-device had **when the activity happened** (its tracking-mode history, see
-`DATA_MODEL.md`) — *not* its current mode, and *not* a raw weekday/weekend
-check on the query range as a whole. A session is cut at every mode change,
+Classification is per device. Two sources decide, both by their value
+**when the activity happened**:
+1. the work type the tracker stamped on the events (`workType` in `POST
+   /api/events`, chosen in the tracker's menu), if it isn't `null`;
+2. otherwise the `trackingMode` the device had at that time (its
+   tracking-mode history, see `DATA_MODEL.md`), per calendar day —
+   *not* its current mode, and *not* a raw weekday/weekend check on the
+   query range as a whole.
+
+Neither source is a special case of the other: the tracker's "As defined on
+server" setting simply hands the decision to the device's mode. A session is cut at every mode change,
 so a device switched mid-day contributes both work and leisure time to that
 day:
 - `auto` (the default): weekday → work, weekend → leisure.
 - `alwaysWork` / `alwaysLeisure`: pins that device's time regardless of day —
   e.g. a company PC whose weekend activity should still count as work.
+
+A session is also cut wherever the stamped work type changes, so a tracker
+switched mid-session contributes to both types.
 
 Because classification is per device, a single calendar day can contain both
 work and leisure time (one device pinned to always-work, another left on

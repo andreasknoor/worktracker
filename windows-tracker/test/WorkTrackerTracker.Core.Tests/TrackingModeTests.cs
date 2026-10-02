@@ -8,24 +8,11 @@ internal sealed class FakeTrackingModeApiClient : ITrackingModeApiClient
 {
     public TrackingMode ServerMode { get; set; } = TrackingMode.Auto;
     public Exception? Failure { get; set; }
-    /// <summary>Runs while a request is "in flight".</summary>
-    public Action? OnRequest { get; set; }
-    public List<TrackingMode> SetCalls { get; } = new();
 
     public Task<TrackingMode> GetTrackingModeAsync(string serverBaseUrl, string apiKey, CancellationToken cancellationToken = default)
     {
-        OnRequest?.Invoke();
         if (Failure is not null) throw Failure;
         return Task.FromResult(ServerMode);
-    }
-
-    public Task<TrackingMode> SetTrackingModeAsync(TrackingMode mode, string serverBaseUrl, string apiKey, CancellationToken cancellationToken = default)
-    {
-        SetCalls.Add(mode);
-        OnRequest?.Invoke();
-        if (Failure is not null) throw Failure;
-        ServerMode = mode;
-        return Task.FromResult(mode);
     }
 }
 
@@ -46,13 +33,12 @@ internal sealed class StubHandler : HttpMessageHandler
 
 public sealed class TrackingModeControllerTests
 {
-    private DateTimeOffset _clock = new(2026, 10, 1, 10, 0, 0, TimeSpan.Zero);
     private readonly FakeTrackingModeApiClient _client = new();
     private readonly TrackingModeController _controller;
 
     public TrackingModeControllerTests()
     {
-        _controller = new TrackingModeController(_client, () => _clock);
+        _controller = new TrackingModeController(_client);
     }
 
     [Fact]
@@ -70,75 +56,13 @@ public sealed class TrackingModeControllerTests
         _client.Failure = new HttpRequestException("offline");
         await _controller.RefreshAsync("https://x", "k");
         Assert.Null(_controller.CurrentMode);
-        Assert.Null(_controller.LastError);
     }
 
     [Fact]
-    public async Task Select_SwitchesAndClearsAnEarlierError()
+    public void Report_UpdatesTheMode()
     {
-        _client.Failure = new HttpRequestException("offline");
-        await _controller.SelectAsync(TrackingMode.AlwaysLeisure, "https://x", "k");
-        Assert.Equal("Server unreachable", _controller.LastError);
-
-        _client.Failure = null;
-        await _controller.SelectAsync(TrackingMode.AlwaysLeisure, "https://x", "k");
-        Assert.Equal(TrackingMode.AlwaysLeisure, _controller.CurrentMode);
-        Assert.Null(_controller.LastError);
-        Assert.False(_controller.IsSwitching);
-    }
-
-    [Fact]
-    public async Task FailedSelect_KeepsThePreviousModeAndIsNotRetried()
-    {
-        await _controller.RefreshAsync("https://x", "k");
-        _client.Failure = new ApiClientException("boom", 500);
-        await _controller.SelectAsync(TrackingMode.AlwaysWork, "https://x", "k");
-
-        Assert.Equal(TrackingMode.Auto, _controller.CurrentMode);
-        Assert.Equal("Server error (HTTP 500)", _controller.LastError);
-
-        _client.Failure = null;
-        await _controller.RefreshAsync("https://x", "k");
-        Assert.Equal(new[] { TrackingMode.AlwaysWork }, _client.SetCalls);
-    }
-
-    [Fact]
-    public void Describe_MapsErrors()
-    {
-        Assert.Equal("API key invalid or revoked", TrackingModeController.Describe(new ApiClientException("x", 401)));
-        Assert.Equal("Server doesn't support switching yet (update it)", TrackingModeController.Describe(new ApiClientException("x", 404)));
-        Assert.Equal("Server unreachable", TrackingModeController.Describe(new TaskCanceledException()));
-    }
-
-    [Fact]
-    public async Task Report_FromARequestStartedBeforeTheLastSwitch_IsIgnored()
-    {
-        var flushStartedAt = _clock;
-        _clock = _clock.AddSeconds(5);
-        await _controller.SelectAsync(TrackingMode.AlwaysLeisure, "https://x", "k");
-
-        _controller.Report(TrackingMode.Auto, flushStartedAt);
-        Assert.Equal(TrackingMode.AlwaysLeisure, _controller.CurrentMode);
-
-        _clock = _clock.AddSeconds(5);
-        _controller.Report(TrackingMode.AlwaysWork, _clock);
+        _controller.Report(TrackingMode.AlwaysWork);
         Assert.Equal(TrackingMode.AlwaysWork, _controller.CurrentMode);
-    }
-
-    [Fact]
-    public async Task Report_WhileSwitching_IsIgnored_AndASecondSelectIsANoOp()
-    {
-        _client.OnRequest = () =>
-        {
-            _controller.Report(TrackingMode.AlwaysWork, _clock);
-            Assert.True(_controller.IsSwitching);
-            _client.OnRequest = null;
-            _ = _controller.SelectAsync(TrackingMode.Auto, "https://x", "k"); // ignored: a switch is in flight
-        };
-        await _controller.SelectAsync(TrackingMode.AlwaysLeisure, "https://x", "k");
-
-        Assert.Equal(TrackingMode.AlwaysLeisure, _controller.CurrentMode);
-        Assert.Equal(new[] { TrackingMode.AlwaysLeisure }, _client.SetCalls);
     }
 
     [Fact]
@@ -147,6 +71,25 @@ public sealed class TrackingModeControllerTests
         await _controller.RefreshAsync("https://x", "k");
         _controller.Reset();
         Assert.Null(_controller.CurrentMode);
+    }
+}
+
+public sealed class WorkTypeSettingTests
+{
+    [Fact]
+    public void Stamped()
+    {
+        Assert.Equal(WorkType.Work, WorkTypes.Stamped(WorkTypeSetting.Work));
+        Assert.Equal(WorkType.Leisure, WorkTypes.Stamped(WorkTypeSetting.Leisure));
+        Assert.Null(WorkTypes.Stamped(WorkTypeSetting.Server));
+    }
+
+    [Fact]
+    public void MenuTitle_ShowsTheServerModeWhenKnown()
+    {
+        Assert.Equal("As defined on server (currently: Auto)", WorkTypes.MenuTitle(WorkTypeSetting.Server, TrackingMode.Auto));
+        Assert.Equal("As defined on server", WorkTypes.MenuTitle(WorkTypeSetting.Server, null));
+        Assert.Equal("Leisure", WorkTypes.MenuTitle(WorkTypeSetting.Leisure, TrackingMode.AlwaysWork));
     }
 }
 
@@ -163,11 +106,11 @@ public sealed class HttpTrackingModeTests
     [Fact]
     public async Task PostEvents_ReportsTheModeFromTheResponse()
     {
-        _handler.Responses.Enqueue((HttpStatusCode.Created, """{"trackingMode":"alwaysLeisure"}"""));
+        _handler.Responses.Enqueue((HttpStatusCode.Created, """{"trackingMode":"alwaysLeisure","acceptsWorkType":true}"""));
         TrackingMode? reported = null;
-        _client.TrackingModeReported = (mode, _) => reported = mode;
+        _client.TrackingModeReported = mode => reported = mode;
 
-        await _client.PostEventsAsync(new[] { DateTimeOffset.UtcNow }, "https://example.test", "k");
+        await _client.PostEventsAsync(new[] { DateTimeOffset.UtcNow }, null, "https://example.test", "k");
         Assert.Equal(TrackingMode.AlwaysLeisure, reported);
     }
 
@@ -176,25 +119,52 @@ public sealed class HttpTrackingModeTests
     {
         _handler.Responses.Enqueue((HttpStatusCode.Created, ""));
         TrackingMode? reported = null;
-        _client.TrackingModeReported = (mode, _) => reported = mode;
+        _client.TrackingModeReported = mode => reported = mode;
 
-        await _client.PostEventsAsync(new[] { DateTimeOffset.UtcNow }, "https://example.test", "k");
+        await _client.PostEventsAsync(new[] { DateTimeOffset.UtcNow }, null, "https://example.test", "k");
         Assert.Null(reported);
     }
 
     [Fact]
-    public async Task SetTrackingMode_PutsTheModeWithTheDeviceKey()
+    public async Task PostEvents_OmitsANullWorkType_AndDoesNotReportSupport()
+    {
+        _handler.Responses.Enqueue((HttpStatusCode.Created, """{"trackingMode":"auto"}"""));
+        var supportReports = new List<bool>();
+        _client.WorkTypeSupportReported = supportReports.Add;
+
+        await _client.PostEventsAsync(new[] { DateTimeOffset.UtcNow }, null, "https://example.test", "k");
+
+        Assert.DoesNotContain("workType", _handler.Requests[0].Body);
+        Assert.Empty(supportReports);
+    }
+
+    [Fact]
+    public async Task PostEvents_SendsTheWorkType_AndReportsWhetherTheServerStoredIt()
+    {
+        _handler.Responses.Enqueue((HttpStatusCode.Created, """{"trackingMode":"auto","acceptsWorkType":true}"""));
+        _handler.Responses.Enqueue((HttpStatusCode.Created, """{"trackingMode":"auto"}"""));
+        var supportReports = new List<bool>();
+        _client.WorkTypeSupportReported = supportReports.Add;
+
+        await _client.PostEventsAsync(new[] { DateTimeOffset.UtcNow }, WorkType.Leisure, "https://example.test", "k");
+        await _client.PostEventsAsync(new[] { DateTimeOffset.UtcNow }, WorkType.Work, "https://example.test", "k");
+
+        Assert.Contains("\"workType\":\"leisure\"", _handler.Requests[0].Body);
+        Assert.Equal(new[] { true, false }, supportReports); // a pre-v1.30 server omits acceptsWorkType
+    }
+
+    [Fact]
+    public async Task GetTrackingMode_ReadsTheModeWithTheDeviceKey()
     {
         _handler.Responses.Enqueue((HttpStatusCode.OK, """{"trackingMode":"alwaysWork","effectiveFrom":"2026-10-01T10:00:00.000Z"}"""));
 
-        var confirmed = await _client.SetTrackingModeAsync(TrackingMode.AlwaysWork, "https://example.test/", "secret");
+        var mode = await _client.GetTrackingModeAsync("https://example.test/", "secret");
 
-        Assert.Equal(TrackingMode.AlwaysWork, confirmed);
-        var (request, body) = Assert.Single(_handler.Requests);
-        Assert.Equal(HttpMethod.Put, request.Method);
+        Assert.Equal(TrackingMode.AlwaysWork, mode);
+        var (request, _) = Assert.Single(_handler.Requests);
+        Assert.Equal(HttpMethod.Get, request.Method);
         Assert.Equal("https://example.test/api/tracker/mode", request.RequestUri!.ToString());
         Assert.Equal("Bearer secret", request.Headers.Authorization!.ToString());
-        Assert.Equal("""{"trackingMode":"alwaysWork"}""", body);
     }
 
     [Fact]

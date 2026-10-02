@@ -50,50 +50,70 @@ final class APIClientTests: XCTestCase {
     }
 
     func test_postEvents_reportsTheModeFromTheResponse() async throws {
-        StubURLProtocol.responses = [(201, #"{"trackingMode":"alwaysLeisure"}"#)]
+        StubURLProtocol.responses = [(201, #"{"trackingMode":"alwaysLeisure","acceptsWorkType":true}"#)]
         var reported: TrackingMode?
-        client.onTrackingModeReported = { mode, _ in reported = mode }
+        client.onTrackingModeReported = { reported = $0 }
 
-        try await client.postEvents([Date()], serverBaseURL: "https://example.test", apiKey: "k")
+        try await client.postEvents([Date()], workType: nil, serverBaseURL: "https://example.test", apiKey: "k")
         XCTAssertEqual(reported, .alwaysLeisure)
     }
 
     func test_postEvents_acceptsAnOlderServersEmptyBody() async throws {
         StubURLProtocol.responses = [(201, "")]
         var reported: TrackingMode?
-        client.onTrackingModeReported = { mode, _ in reported = mode }
+        client.onTrackingModeReported = { reported = $0 }
 
-        try await client.postEvents([Date()], serverBaseURL: "https://example.test", apiKey: "k")
+        try await client.postEvents([Date()], workType: nil, serverBaseURL: "https://example.test", apiKey: "k")
         XCTAssertNil(reported)
     }
 
-    func test_setTrackingMode_putsTheModeWithTheDeviceKey() async throws {
-        StubURLProtocol.responses = [(200, #"{"trackingMode":"alwaysWork","effectiveFrom":"2026-10-01T10:00:00.000Z"}"#)]
+    func test_postEvents_omitsANilWorkType_andDoesNotReportSupport() async throws {
+        StubURLProtocol.responses = [(201, #"{"trackingMode":"auto"}"#)]
+        var supportReports: [Bool] = []
+        client.onWorkTypeSupportReported = { supportReports.append($0) }
 
-        let confirmed = try await client.setTrackingMode(.alwaysWork, serverBaseURL: "https://example.test", apiKey: "secret")
+        try await client.postEvents([Date()], workType: nil, serverBaseURL: "https://example.test", apiKey: "k")
 
-        XCTAssertEqual(confirmed, .alwaysWork)
-        let request = try XCTUnwrap(StubURLProtocol.requests.first)
-        XCTAssertEqual(request.httpMethod, "PUT")
-        XCTAssertEqual(request.url?.absoluteString, "https://example.test/api/tracker/mode")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
-        let body = try JSONSerialization.jsonObject(with: StubURLProtocol.bodies[0]) as? [String: String]
-        XCTAssertEqual(body, ["trackingMode": "alwaysWork"])
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: StubURLProtocol.bodies[0]) as? [String: Any])
+        XCTAssertNil(body["workType"])
+        XCTAssertEqual(supportReports, [])
     }
 
-    func test_getTrackingMode_mapsStatusCodesToErrors() async {
-        StubURLProtocol.responses = [(401, ""), (404, "")]
+    func test_postEvents_sendsTheWorkType_andReportsWhetherTheServerStoredIt() async throws {
+        StubURLProtocol.responses = [
+            (201, #"{"trackingMode":"auto","acceptsWorkType":true}"#),
+            (201, #"{"trackingMode":"auto"}"#),
+        ]
+        var supportReports: [Bool] = []
+        client.onWorkTypeSupportReported = { supportReports.append($0) }
+
+        try await client.postEvents([Date()], workType: .leisure, serverBaseURL: "https://example.test", apiKey: "k")
+        try await client.postEvents([Date()], workType: .work, serverBaseURL: "https://example.test", apiKey: "k")
+
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: StubURLProtocol.bodies[0]) as? [String: Any])
+        XCTAssertEqual(body["workType"] as? String, "leisure")
+        XCTAssertEqual(supportReports, [true, false], "a pre-v1.30 server omits acceptsWorkType")
+    }
+
+    func test_getTrackingMode_readsTheModeWithTheDeviceKey() async throws {
+        StubURLProtocol.responses = [(200, #"{"trackingMode":"alwaysWork","effectiveFrom":"2026-10-01T10:00:00.000Z"}"#)]
+
+        let mode = try await client.getTrackingMode(serverBaseURL: "https://example.test", apiKey: "secret")
+
+        XCTAssertEqual(mode, .alwaysWork)
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.url?.absoluteString, "https://example.test/api/tracker/mode")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+    }
+
+    func test_getTrackingMode_mapsUnauthorized() async {
+        StubURLProtocol.responses = [(401, "")]
         do {
             _ = try await client.getTrackingMode(serverBaseURL: "https://example.test", apiKey: "k")
             XCTFail("expected unauthorized")
         } catch {
-            XCTAssertEqual(TrackingModeController.describe(error), "API key invalid or revoked")
-        }
-        do {
-            _ = try await client.getTrackingMode(serverBaseURL: "https://example.test", apiKey: "k")
-            XCTFail("expected 404")
-        } catch {
-            XCTAssertEqual(TrackingModeController.describe(error), "Server doesn't support switching yet (update it)")
+            guard case APIClientError.unauthorized = error else { return XCTFail("unexpected \(error)") }
         }
     }
 }

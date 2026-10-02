@@ -173,7 +173,7 @@ describe("Tracker self-service: reading and switching the mode", () => {
 
     const first = await post();
     expect(first.status).toBe(201);
-    expect(await first.json()).toEqual({ trackingMode: "auto" });
+    expect(await first.json()).toEqual({ trackingMode: "auto", acceptsWorkType: true });
 
     ctx.clock.nowMs = monday + HOUR;
     await ctx.app.request(`/api/devices/${laptop.id}`, {
@@ -181,6 +181,74 @@ describe("Tracker self-service: reading and switching the mode", () => {
       headers: { "Content-Type": "application/json", Cookie: ctx.cookie },
       body: JSON.stringify({ trackingMode: "alwaysWork" }),
     });
-    expect(await (await post()).json()).toEqual({ trackingMode: "alwaysWork" });
+    expect(await (await post()).json()).toEqual({ trackingMode: "alwaysWork", acceptsWorkType: true });
+  });
+});
+
+describe("Event ingestion: work type chosen in the tracker", () => {
+  let ctx: Ctx;
+  beforeEach(async () => {
+    ctx = await setUp();
+  });
+
+  function postEvents(apiKey: string, from: number, to: number, workType?: string | null) {
+    const timestamps: string[] = [];
+    for (let t = from; t <= to; t += 10 * MINUTE) timestamps.push(new Date(t).toISOString());
+    const body = workType === undefined ? { timestamps } : { timestamps, workType };
+    return asTracker(ctx, apiKey, "/api/events", { method: "POST", body: JSON.stringify(body) });
+  }
+
+  async function hours(start: string, workType: string, day = 0): Promise<number> {
+    const week = await (await ctx.app.request(`/api/stats/week?start=${start}&workType=${workType}`, { headers: { Cookie: ctx.cookie } })).json();
+    return week.days[day].hours as number;
+  }
+
+  it("counts time as the tracker's choice, whatever the device's mode", async () => {
+    const laptop = await createDevice(ctx, "Laptop");
+    await putMode(ctx, laptop.apiKey, "alwaysLeisure");
+
+    expect((await postEvents(laptop.apiKey, monday + 9 * HOUR, monday + 11 * HOUR, "work")).status).toBe(201);
+    expect(await hours("2026-03-09", "work")).toBeCloseTo(2, 5);
+    expect(await hours("2026-03-09", "leisure")).toBe(0);
+  });
+
+  it("treats a missing or null work type as 'as defined on the server'", async () => {
+    const laptop = await createDevice(ctx, "Laptop");
+    await postEvents(laptop.apiKey, monday + 9 * HOUR, monday + 10 * HOUR - 10 * MINUTE);
+    await postEvents(laptop.apiKey, monday + 10 * HOUR, monday + 11 * HOUR, null);
+    expect(await hours("2026-03-09", "work")).toBeCloseTo(2, 5); // auto on a Monday
+  });
+
+  it("splits one session where the tracker switched", async () => {
+    const laptop = await createDevice(ctx, "Laptop");
+    await postEvents(laptop.apiKey, monday + 9 * HOUR, monday + 10 * HOUR - 10 * MINUTE);
+    await postEvents(laptop.apiKey, monday + 10 * HOUR, monday + 11 * HOUR, "leisure");
+
+    expect(await hours("2026-03-09", "work")).toBeCloseTo(1, 5);
+    expect(await hours("2026-03-09", "leisure")).toBeCloseTo(1, 5);
+    expect(await hours("2026-03-09", "all")).toBeCloseTo(2, 5);
+  });
+
+  it("keeps the first work type when a batch is re-sent", async () => {
+    const laptop = await createDevice(ctx, "Laptop");
+    await postEvents(laptop.apiKey, monday + 9 * HOUR, monday + 10 * HOUR, "leisure");
+    await postEvents(laptop.apiKey, monday + 9 * HOUR, monday + 10 * HOUR, "work");
+    expect(await hours("2026-03-09", "leisure")).toBeCloseTo(1, 5);
+    expect(await hours("2026-03-09", "work")).toBe(0);
+  });
+
+  it("colors the overview by the tracker's choice", async () => {
+    const laptop = await createDevice(ctx, "Laptop");
+    await postEvents(laptop.apiKey, monday + 9 * HOUR, monday + 10 * HOUR, "leisure");
+    const timeline = await (await ctx.app.request("/api/stats/week-timeline?start=2026-03-09", { headers: { Cookie: ctx.cookie } })).json();
+    const segments = JSON.stringify(timeline);
+    expect(segments).toContain('"leisure"');
+    expect(segments).not.toContain('"work"');
+  });
+
+  it("rejects an unknown work type", async () => {
+    const laptop = await createDevice(ctx, "Laptop");
+    expect((await postEvents(laptop.apiKey, monday, monday, "sometimes")).status).toBe(400);
+    expect((await postEvents(laptop.apiKey, monday, monday, "alwaysWork")).status).toBe(400);
   });
 });

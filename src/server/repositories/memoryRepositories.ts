@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { TrackingMode, TrackingModeChange } from "@worktracker/core";
+import type { StampedEvent, TrackingMode, TrackingModeChange, WorkType } from "@worktracker/core";
 import type {
   ActivityEventsRepository,
   Device,
@@ -139,30 +139,38 @@ export class InMemoryDevicesRepository implements DevicesRepository {
 }
 
 export class InMemoryActivityEventsRepository implements ActivityEventsRepository {
-  private readonly events: { deviceId: string | null; timestampMs: number }[] = [];
+  private readonly events: { deviceId: string | null; timestampMs: number; workType: WorkType | null }[] = [];
 
   /**
    * Bulk-loads events without the duplicate check `insertEvents` does
    * (which is quadratic) — for offline tooling loading an already-unique
    * database export. `deviceId: null` loads orphaned events.
    */
-  seedEvents(deviceId: string | null, timestampsMs: readonly number[]): void {
-    for (const timestampMs of timestampsMs) this.events.push({ deviceId, timestampMs });
+  seedEvents(deviceId: string | null, timestampsMs: readonly number[], workType: WorkType | null = null): void {
+    for (const timestampMs of timestampsMs) this.events.push({ deviceId, timestampMs, workType });
   }
 
-  async insertEvents(deviceId: string, timestampsMs: readonly number[]): Promise<void> {
+  async insertEvents(deviceId: string, timestampsMs: readonly number[], workType: WorkType | null = null): Promise<void> {
     for (const timestampMs of timestampsMs) {
       // Mirrors the Postgres unique index on (device_id, timestamp_utc).
       if (this.events.some((e) => e.deviceId === deviceId && e.timestampMs === timestampMs)) continue;
-      this.events.push({ deviceId, timestampMs });
+      this.events.push({ deviceId, timestampMs, workType });
     }
   }
 
-  async getEventsInRangeForDevice(deviceId: string, startMs: number, endExclusiveMs: number): Promise<number[]> {
+  private stampedInRange(deviceId: string | null, startMs: number, endExclusiveMs: number): StampedEvent[] {
     return this.events
       .filter((e) => e.deviceId === deviceId && e.timestampMs >= startMs && e.timestampMs < endExclusiveMs)
-      .map((e) => e.timestampMs)
-      .sort((a, b) => a - b);
+      .map((e) => ({ timestamp: e.timestampMs, workType: e.workType }))
+      .sort((a, b) => a.timestamp - b.timestamp);
+  }
+
+  async getEventsInRangeForDevice(deviceId: string, startMs: number, endExclusiveMs: number): Promise<number[]> {
+    return this.stampedInRange(deviceId, startMs, endExclusiveMs).map((e) => e.timestamp);
+  }
+
+  async getStampedEventsInRangeForDevice(deviceId: string, startMs: number, endExclusiveMs: number): Promise<StampedEvent[]> {
+    return this.stampedInRange(deviceId, startMs, endExclusiveMs);
   }
 
   async getFirstEventTimestamp(deviceId?: string): Promise<number | null> {
@@ -178,10 +186,11 @@ export class InMemoryActivityEventsRepository implements ActivityEventsRepositor
   }
 
   async getOrphanedEventsInRange(startMs: number, endExclusiveMs: number): Promise<number[]> {
-    return this.events
-      .filter((e) => e.deviceId === null && e.timestampMs >= startMs && e.timestampMs < endExclusiveMs)
-      .map((e) => e.timestampMs)
-      .sort((a, b) => a - b);
+    return this.stampedInRange(null, startMs, endExclusiveMs).map((e) => e.timestamp);
+  }
+
+  async getStampedOrphanedEventsInRange(startMs: number, endExclusiveMs: number): Promise<StampedEvent[]> {
+    return this.stampedInRange(null, startMs, endExclusiveMs);
   }
 }
 
