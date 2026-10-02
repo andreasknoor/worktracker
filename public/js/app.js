@@ -594,10 +594,12 @@
       parts.push('<text class="axis-label" x="' + (padL - 8) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end">' + Math.round(v) + 'h</text>');
     });
 
-    if (targetHours <= maxHours) {
+    // A daily *work* target: meaningless against leisure-only bars, so it's
+    // hidden under the leisure filter.
+    if (targetHours <= maxHours && state.workType !== "leisure") {
       const ty = yFor(targetHours);
       parts.push('<line class="target-line" x1="' + padL + '" y1="' + ty.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + ty.toFixed(1) + '"></line>');
-      parts.push('<text class="target-label" x="' + (W - padR) + '" y="' + (ty - 5).toFixed(1) + '" text-anchor="end">8h target</text>');
+      parts.push('<text class="target-label" x="' + (W - padR) + '" y="' + (ty - 5).toFixed(1) + '" text-anchor="end">8h work target</text>');
     }
 
     const baseY = yFor(0);
