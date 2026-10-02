@@ -1543,7 +1543,7 @@
     }
     const weeklyTargetHours = Number(weeklyTargetHoursInput.value);
     if (!Number.isFinite(weeklyTargetHours) || weeklyTargetHours <= 0 || weeklyTargetHours > 168) {
-      showToast("Weekly target must be a positive number of hours, up to 168", true);
+      showToast("Weekly work target must be a positive number of hours, up to 168", true);
       return;
     }
     const balanceWindowWeeks = Number(balanceWindowWeeksInput.value);
