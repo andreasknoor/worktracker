@@ -193,11 +193,13 @@ tiers exist, driven by what each card's fetch call actually sends:
   hours trend, Session log. All go through `withStatsParams` in
   `public/js/app.js`, so every filter chip applies.
 - **`tier-partial`** — Weekly overview. Also goes through
-  `withStatsParams`, so day type and work type apply, but the date-range
+  `withStatsParams`, so day type, work type and the device picker apply
+  (the badge names only the filter-row chips; the device picker lives in
+  the header, so the scope line spells it out), but the date-range
   chips don't — the card has its own Week/Month + ‹ › navigator instead,
   and always shows whatever period that's on regardless of "Last 7
   days"/"This week"/etc. above.
-- **`tier-none`** — Weekly target/balance and Daily rhythm. Deliberately
+- **`tier-none`** — Weekly work target/balance and Daily rhythm. Deliberately
   bypass `withStatsParams` (via `fetchWeekForBalance`/
   `fetchWeekTimelineForRhythm`), respecting only the device picker — see D6
   above for why the target/balance card in particular needs to stay
