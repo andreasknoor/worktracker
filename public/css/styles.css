@@ -646,7 +646,8 @@ table.data-table td.num, table.data-table th.num {
 .field { margin-bottom: 14px; }
 .field label { display: block; font-size: 13px; margin-bottom: 4px; color: var(--text-secondary); }
 .field input[type="number"],
-.field input[type="time"] {
+.field input[type="time"],
+.field input[type="date"] {
   width: 100%;
   padding: 8px 10px;
   border-radius: 8px;
@@ -658,7 +659,8 @@ table.data-table td.num, table.data-table th.num {
 }
 .field .hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
 .field-row { display: flex; align-items: center; gap: 8px; }
-.field-row input[type="time"] { flex: 1; width: auto; }
+.field-row input[type="time"],
+.field-row input[type="date"] { flex: 1; width: auto; }
 .field-row-sep { color: var(--text-muted); font-size: 13px; }
 .switch-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .switch-row .switch-label { font-size: 13px; }

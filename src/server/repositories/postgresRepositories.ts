@@ -303,6 +303,8 @@ export class PostgresSettingsRepository implements SettingsRepository {
       balanceWindowWeeks: Number.isInteger(balanceWindowWeeks) && balanceWindowWeeks > 0
         ? balanceWindowWeeks
         : DEFAULT_GLOBAL_SETTINGS.balanceWindowWeeks,
+      // Stored as "" when cleared, so the upsert below stays one statement.
+      balanceStartDate: stored["BalanceStartDate"] || null,
     };
   }
 
@@ -310,7 +312,7 @@ export class PostgresSettingsRepository implements SettingsRepository {
     await this.pool.query(
       `INSERT INTO settings (key, value) VALUES
          ('CoreHoursStart', $1), ('CoreHoursEnd', $2), ('DeviceStaleThresholdHours', $3),
-         ('WeeklyTargetHours', $4), ('BalanceWindowWeeks', $5)
+         ('WeeklyTargetHours', $4), ('BalanceWindowWeeks', $5), ('BalanceStartDate', $6)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
       [
         settings.coreHoursStart,
@@ -318,6 +320,7 @@ export class PostgresSettingsRepository implements SettingsRepository {
         String(settings.deviceStaleThresholdHours),
         String(settings.weeklyTargetHours),
         String(settings.balanceWindowWeeks),
+        settings.balanceStartDate ?? "",
       ],
     );
     return settings;

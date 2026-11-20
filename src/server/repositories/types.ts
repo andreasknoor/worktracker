@@ -120,11 +120,18 @@ export interface GlobalSettings {
   weeklyTargetHours: number;
   /**
    * How many complete previous weeks the "carried balance" tile sums over.
-   * Deliberately a rolling window rather than a fixed start date — avoids
-   * needing to pick (and store) an arbitrary "balance tracking began here"
-   * date; see docs/IMPLEMENTATION_NOTES.md.
+   * A rolling window, optionally narrowed by `balanceStartDate`; see
+   * docs/IMPLEMENTATION_NOTES.md (D6).
    */
   balanceWindowWeeks: number;
+  /**
+   * Optional "yyyy-MM-dd" date the flex-time balance starts counting from, or
+   * `null` for no lower bound. Days before it are excluded from both the hours
+   * and the target, so setting it to today resets the balance to zero. It only
+   * narrows the `balanceWindowWeeks` rolling window, never extends it; see
+   * docs/IMPLEMENTATION_NOTES.md (D6).
+   */
+  balanceStartDate: string | null;
 }
 
 export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
@@ -133,6 +140,7 @@ export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
   deviceStaleThresholdHours: 24,
   weeklyTargetHours: 40,
   balanceWindowWeeks: 8,
+  balanceStartDate: null,
 };
 
 export interface SettingsRepository {

@@ -760,6 +760,42 @@ describe("Settings validation", () => {
     expect(response.status).toBe(400);
   });
 
+  describe("balanceStartDate", () => {
+    const base = { coreHoursStart: "09:00", coreHoursEnd: "18:00", deviceStaleThresholdHours: 24, weeklyTargetHours: 40, balanceWindowWeeks: 8 };
+    const put = (body: object) =>
+      authed(ctx, "/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const getSettings = async () => (await authed(ctx, "/api/settings")).json();
+
+    it("defaults to null when nothing has been saved", async () => {
+      expect((await getSettings()).balanceStartDate).toBeNull();
+    });
+
+    it("saves and round-trips a date", async () => {
+      expect((await put({ ...base, balanceStartDate: "2026-11-20" })).status).toBe(200);
+      expect((await getSettings()).balanceStartDate).toBe("2026-11-20");
+    });
+
+    it("keeps the stored date when the field is omitted", async () => {
+      await put({ ...base, balanceStartDate: "2026-11-20" });
+      expect((await put(base)).status).toBe(200);
+      expect((await getSettings()).balanceStartDate).toBe("2026-11-20");
+    });
+
+    it("clears the stored date when null is sent", async () => {
+      await put({ ...base, balanceStartDate: "2026-11-20" });
+      expect((await put({ ...base, balanceStartDate: null })).status).toBe(200);
+      expect((await getSettings()).balanceStartDate).toBeNull();
+    });
+
+    it.each(["2026-02-30", "20.11.2026", "", 20261120])("rejects %j", async (value) => {
+      expect((await put({ ...base, balanceStartDate: value })).status).toBe(400);
+    });
+  });
+
   it("rejects a non-integer balanceWindowWeeks", async () => {
     const response = await authed(ctx, "/api/settings", {
       method: "PUT",

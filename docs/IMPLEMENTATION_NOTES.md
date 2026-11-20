@@ -183,6 +183,22 @@ entirely client-side from the existing `/api/stats/week` and
 `/api/stats/week-timeline` endpoints — no new stats endpoints were added,
 since both derive from data those endpoints already return.
 
+**Update (v1.32): optional start date on top of the window.** The rolling
+window had no way to start over: weeks before tracking began (or a fresh
+start on a new machine) counted as zero hours, so the carried balance
+started at roughly `-balanceWindowWeeks × weeklyTargetHours`. The open
+question above ("when did tracking start?") now has a natural answer: the
+user picks it. `balanceStartDate` (global setting, `null` by default, so
+existing behavior is unchanged) only *narrows* the window: weeks ending
+before it are dropped from the chart, and inside a partially covered week
+both hours and the Mon–Fri target count only from that date on. "Reset"
+is just setting it to today (the settings dialog has a "Today" button). It
+can't extend the window past `balanceWindowWeeks` — once the window has
+moved past the start date, the date stops mattering. The calculation stays
+client-side in `renderTargetBalance`; the server only stores and validates
+the date. `PUT /api/settings` keeps the stored date when the field is
+omitted, so a dashboard tab still running pre-v1.32 JS can't clear it.
+
 ## D7 — Filter scope: card order and the `.scope-badge` tiers
 
 Added after v1: the top filter row (date range, day type, work type) does

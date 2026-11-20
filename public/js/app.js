@@ -109,6 +109,7 @@
     deviceStaleThresholdHours: 24,  // refreshed from settings; used by the device health banner
     weeklyTargetHours: 40,          // refreshed from settings; used by the weekly target/balance card
     balanceWindowWeeks: 8,          // refreshed from settings; how many complete past weeks "carried balance" sums over
+    balanceStartDate: null,         // Date or null; refreshed from settings; days before it don't count toward the balance
     selectedDeviceId: safeGetItem(DEVICE_STORAGE_KEY) || "", // "" = all devices combined
     timelineCoreHoursOnly: safeGetItem(CORE_HOURS_ONLY_STORAGE_KEY) === "1", // crop the timeline y-axis to core hours ± 1h
     dayType: safeGetItem(DAY_TYPE_STORAGE_KEY) || "all", // "all" | "weekday" | "weekend"
@@ -764,53 +765,80 @@
 
   async function renderTargetBalance() {
     const currentMonday = mondayOf(today);
-    // mondays[0..balanceWindowWeeks-1] are complete past weeks, oldest first;
-    // the last entry is the current (partial) week — same order as the
+    // Optional lower bound (Settings → "Flex-balance start date"): days before
+    // it count neither hours nor target, so setting it to today resets the
+    // balance to zero. It only narrows the rolling window, never extends it.
+    const balanceStart = state.balanceStartDate;
+    const countsTowardBalance = d => !balanceStart || d >= balanceStart;
+
+    // mondays[0..n-2] are complete past weeks, oldest first — at most
+    // balanceWindowWeeks of them, minus any that end before balanceStart; the
+    // last entry is the current (partial) week — same order as the
     // `weekTotals`/`deltas` arrays built from it below.
     const mondays = [];
     for (let w = state.balanceWindowWeeks; w >= 1; w--) {
       const m = new Date(currentMonday);
       m.setDate(m.getDate() - 7 * w);
-      mondays.push(m);
+      const weekSunday = new Date(m);
+      weekSunday.setDate(weekSunday.getDate() + 6);
+      if (countsTowardBalance(weekSunday)) mondays.push(m);
     }
     mondays.push(currentMonday);
+    const pastWeekCount = mondays.length - 1;
 
     const weeks = await fetchWeeksForBalance(mondays[0], mondays.length);
-    const weekTotals = weeks.map(w => w.days.reduce((sum, d) => sum + d.hours, 0));
+    const weekTotals = weeks.map(w => w.days
+      .filter(d => countsTowardBalance(parseIsoDate(d.date)))
+      .reduce((sum, d) => sum + d.hours, 0));
     const currentWeekHours = weekTotals[weekTotals.length - 1];
     const pastWeekTotals = weekTotals.slice(0, -1);
 
     const target = state.weeklyTargetHours;
     const dailyTarget = target / 5;
-    let elapsedWeekdays = 0;
-    for (let offset = 0; offset < 7; offset++) {
-      const d = new Date(currentMonday);
-      d.setDate(d.getDate() + offset);
-      if (d > today) break;
-      if (d.getDay() >= 1 && d.getDay() <= 5) elapsedWeekdays++;
+    // Target for the counted weekdays (Mon–Fri) of the week starting at
+    // `monday`, up to and including `lastDay`.
+    function targetFor(monday, lastDay) {
+      let weekdays = 0;
+      for (let offset = 0; offset < 7; offset++) {
+        const d = new Date(monday);
+        d.setDate(d.getDate() + offset);
+        if (d > lastDay) break;
+        if (d.getDay() >= 1 && d.getDay() <= 5 && countsTowardBalance(d)) weekdays++;
+      }
+      return dailyTarget * weekdays;
     }
-    const targetByNow = dailyTarget * elapsedWeekdays;
+    const pastWeekTargets = mondays.slice(0, -1).map(m => {
+      const weekSunday = new Date(m);
+      weekSunday.setDate(weekSunday.getDate() + 6);
+      return targetFor(m, weekSunday);
+    });
+    const targetByNow = targetFor(currentMonday, today);
     const weekBalance = currentWeekHours - targetByNow;
-    const carriedBalance = pastWeekTotals.reduce((sum, h) => sum + (h - target), 0);
+    const carriedBalance = pastWeekTotals.reduce((sum, h, i) => sum + (h - pastWeekTargets[i]), 0);
 
     const sunday = new Date(currentMonday);
     sunday.setDate(sunday.getDate() + 6);
     document.getElementById("targetCaption").textContent =
       formatShortDate(currentMonday) + " – " + formatShortDate(sunday) + " · target " + fmtHours(target) + "/week";
     document.getElementById("balanceCaption").textContent =
-      "Last " + state.balanceWindowWeeks + " complete weeks, plus this week so far — the line is the running total";
+      (pastWeekCount === 0 ? "This week so far" : "Last " + pastWeekCount + " complete week" + (pastWeekCount === 1 ? "" : "s") + ", plus this week so far") +
+      (balanceStart ? ", counting from " + formatShortDate(balanceStart) : "") +
+      " — the line is the running total";
 
     const grid = document.getElementById("targetStatGrid");
     grid.innerHTML = "";
     buildMiniStatTile(grid, "This week", fmtHours(currentWeekHours));
     buildMiniStatTile(grid, "Target by now", fmtHours(targetByNow));
     buildMiniStatTile(grid, "This week's balance", fmtSignedHours(weekBalance), weekBalance >= 0 ? "on track" : "behind", weekBalance >= 0);
-    buildMiniStatTile(grid, "Carried (" + state.balanceWindowWeeks + "wk)", fmtSignedHours(carriedBalance), null, carriedBalance >= 0);
+    buildMiniStatTile(grid, "Carried (" + pastWeekCount + "wk)", fmtSignedHours(carriedBalance), null, carriedBalance >= 0);
 
     // ---- progress bar (this week vs. target-by-now) ----
     const progressSvg = document.getElementById("targetProgressSvg");
     const PW = 1040, PY = 8, PH = 28;
-    const domain = Math.max(target, currentWeekHours, 1) * 1.05;
+    const currentWeekSunday = new Date(currentMonday);
+    currentWeekSunday.setDate(currentWeekSunday.getDate() + 6);
+    const currentWeekTarget = targetFor(currentMonday, currentWeekSunday);
+    const domain = Math.max(currentWeekTarget, currentWeekHours, 1) * 1.05;
     const fillWidth = Math.min(PW, (currentWeekHours / domain) * PW);
     const markerX = Math.min(PW, (targetByNow / domain) * PW);
     progressSvg.innerHTML =
@@ -820,10 +848,10 @@
       '<text class="target-progress-marker-label" x="' + markerX.toFixed(1) + '" y="' + (PY + PH + 18) + '" text-anchor="' + (markerX > PW - 150 ? "end" : "middle") + '">target by now ' + fmtHours(targetByNow) + '</text>';
     progressSvg.setAttribute("viewBox", "0 0 " + PW + " 56");
     progressSvg.setAttribute("role", "img");
-    progressSvg.setAttribute("aria-label", "This week's progress: " + fmtHours(currentWeekHours) + " of a " + fmtHours(target) + " target.");
+    progressSvg.setAttribute("aria-label", "This week's progress: " + fmtHours(currentWeekHours) + " of a " + fmtHours(currentWeekTarget) + " target.");
 
     // ---- balance bar + running-total line chart ----
-    const deltas = pastWeekTotals.map(h => h - target).concat([weekBalance]);
+    const deltas = pastWeekTotals.map((h, i) => h - pastWeekTargets[i]).concat([weekBalance]);
     let runningSoFar = 0;
     const runningTotals = deltas.map(d => { runningSoFar += d; return runningSoFar; });
 
@@ -858,7 +886,7 @@
     bsvg.innerHTML = bparts.join("");
     bsvg.setAttribute("viewBox", "0 0 " + BW + " 220");
     bsvg.setAttribute("role", "img");
-    bsvg.setAttribute("aria-label", "Flex-time balance over the last " + state.balanceWindowWeeks + " weeks plus this week, running total " + fmtSignedHours(runningTotals[runningTotals.length - 1]) + ".");
+    bsvg.setAttribute("aria-label", "Flex-time balance over the last " + pastWeekCount + " weeks plus this week, running total " + fmtSignedHours(runningTotals[runningTotals.length - 1]) + ".");
 
     bsvg.querySelectorAll("[data-idx]").forEach(node => {
       const idx = +node.getAttribute("data-idx");
@@ -1507,6 +1535,9 @@
   const deviceStaleThresholdHoursInput = document.getElementById("deviceStaleThresholdHours");
   const weeklyTargetHoursInput = document.getElementById("weeklyTargetHours");
   const balanceWindowWeeksInput = document.getElementById("balanceWindowWeeks");
+  const balanceStartDateInput = document.getElementById("balanceStartDate");
+  document.getElementById("balanceStartToday").addEventListener("click", () => { balanceStartDateInput.value = isoDate(new Date()); });
+  document.getElementById("balanceStartClear").addEventListener("click", () => { balanceStartDateInput.value = ""; });
   const toast = document.getElementById("toast");
 
   function showToast(message, isError) {
@@ -1524,6 +1555,7 @@
       deviceStaleThresholdHoursInput.value = settings.deviceStaleThresholdHours;
       weeklyTargetHoursInput.value = settings.weeklyTargetHours;
       balanceWindowWeeksInput.value = settings.balanceWindowWeeks;
+      balanceStartDateInput.value = settings.balanceStartDate || "";
       openModal(overlay);
     } catch (err) {
       showToast("Could not load settings", true);
@@ -1561,12 +1593,14 @@
         deviceStaleThresholdHours: staleThresholdHours,
         weeklyTargetHours: weeklyTargetHours,
         balanceWindowWeeks: balanceWindowWeeks,
+        balanceStartDate: balanceStartDateInput.value || null,
       });
       state.coreHoursStartMinutes = parseHHMMToMinutes(saved.coreHoursStart);
       state.coreHoursEndMinutes = parseHHMMToMinutes(saved.coreHoursEnd);
       state.deviceStaleThresholdHours = saved.deviceStaleThresholdHours;
       state.weeklyTargetHours = saved.weeklyTargetHours;
       state.balanceWindowWeeks = saved.balanceWindowWeeks;
+      state.balanceStartDate = saved.balanceStartDate ? parseIsoDate(saved.balanceStartDate) : null;
       closeModal(overlay);
       showToast("Settings saved");
       renderAll();
@@ -2322,6 +2356,11 @@
           state.deviceStaleThresholdHours = settings.deviceStaleThresholdHours;
           state.weeklyTargetHours = settings.weeklyTargetHours;
           state.balanceWindowWeeks = settings.balanceWindowWeeks;
+          state.balanceStartDate = settings.balanceStartDate ? parseIsoDate(settings.balanceStartDate) : null;
+          // The first renderAll() may already have drawn the balance card
+          // with the built-in defaults — redraw it with the saved target,
+          // window and start date instead of waiting for the next refresh.
+          renderTargetBalance().catch(err => console.error(err));
           // The banner may already have rendered once using the built-in
           // default (24h) before this resolved — recompute now in case the
           // saved threshold differs.

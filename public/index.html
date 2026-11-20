@@ -311,6 +311,16 @@
       <div class="hint">How many complete past weeks the carried flex-time balance sums over.</div>
     </div>
 
+    <div class="field">
+      <label for="balanceStartDate">Flex-balance start date</label>
+      <div class="field-row">
+        <input type="date" id="balanceStartDate">
+        <button type="button" class="btn" id="balanceStartToday">Today</button>
+        <button type="button" class="btn" id="balanceStartClear">Clear</button>
+      </div>
+      <div class="hint">Optional. Days before this date don't count toward the balance — set it to today to start from zero.</div>
+    </div>
+
     <div class="modal-actions">
       <button class="btn" id="settingsCancel">Cancel</button>
       <button class="btn primary" id="settingsSave">Save</button>

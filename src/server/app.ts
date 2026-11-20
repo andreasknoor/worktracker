@@ -666,6 +666,7 @@ export function createApp(deps: AppDependencies): Hono {
         deviceStaleThresholdHours?: number;
         weeklyTargetHours?: number;
         balanceWindowWeeks?: number;
+        balanceStartDate?: string | null;
       }>()
       .catch(() => ({
         coreHoursStart: undefined,
@@ -673,6 +674,7 @@ export function createApp(deps: AppDependencies): Hono {
         deviceStaleThresholdHours: undefined,
         weeklyTargetHours: undefined,
         balanceWindowWeeks: undefined,
+        balanceStartDate: undefined,
       }));
     const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -694,6 +696,18 @@ export function createApp(deps: AppDependencies): Hono {
     if (!Number.isInteger(body.balanceWindowWeeks) || (body.balanceWindowWeeks as number) <= 0 || (body.balanceWindowWeeks as number) > 52) {
       return c.json({ error: "balanceWindowWeeks must be a positive integer of at most 52" }, 400);
     }
+    // Optional: omitted keeps the stored value (so a client that predates the
+    // field can't silently clear it), null clears it.
+    let balanceStartDate: string | null;
+    if (body.balanceStartDate === undefined) {
+      balanceStartDate = (await deps.settings.get()).balanceStartDate;
+    } else if (body.balanceStartDate === null) {
+      balanceStartDate = null;
+    } else if (typeof body.balanceStartDate === "string" && isValidDateKey(body.balanceStartDate)) {
+      balanceStartDate = body.balanceStartDate;
+    } else {
+      return c.json({ error: "balanceStartDate must be a yyyy-MM-dd date or null" }, 400);
+    }
 
     const saved = await deps.settings.save({
       coreHoursStart: body.coreHoursStart,
@@ -701,6 +715,7 @@ export function createApp(deps: AppDependencies): Hono {
       deviceStaleThresholdHours: body.deviceStaleThresholdHours as number,
       weeklyTargetHours: body.weeklyTargetHours as number,
       balanceWindowWeeks: body.balanceWindowWeeks as number,
+      balanceStartDate,
     });
     return c.json(saved);
   });

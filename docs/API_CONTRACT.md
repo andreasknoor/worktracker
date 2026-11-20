@@ -126,15 +126,18 @@ preferences remain global.
   "coreHoursEnd": "18:00",
   "deviceStaleThresholdHours": 24,
   "weeklyTargetHours": 40,
-  "balanceWindowWeeks": 8
+  "balanceWindowWeeks": 8,
+  "balanceStartDate": null
 }
 ```
 `weeklyTargetHours` and `balanceWindowWeeks` back the dashboard's weekly
 target/balance card: `weeklyTargetHours` is the work-time target for a full
 calendar week (spread evenly over Mon-Fri for the "target by now" figure);
 `balanceWindowWeeks` is how many complete previous weeks the "carried
-balance" tile sums over. Deliberately a rolling window rather than a stored
-start date — see `docs/IMPLEMENTATION_NOTES.md`.
+balance" tile sums over. `balanceStartDate` (`"yyyy-MM-dd"` or `null`,
+default `null`) optionally narrows that window: days before it count toward
+neither the hours nor the target, so setting it to today resets the balance
+to zero. See `docs/IMPLEMENTATION_NOTES.md` (D6).
 
 No trailing slash — the original `.NET` reference implementation's ASP.NET
 Core convention was `/api/settings/`, but on Vercel a path with a trailing
@@ -149,6 +152,9 @@ Request body same shape as the `GET` response. Validation:
 - `deviceStaleThresholdHours` must be a positive number, else `400`.
 - `weeklyTargetHours` must be a positive number of at most 168 (a full week), else `400`.
 - `balanceWindowWeeks` must be a positive integer of at most 52, else `400`.
+- `balanceStartDate` is optional: omitted keeps the stored value (so an
+  older client can't clear it by accident), `null` clears it, anything other
+  than a valid `yyyy-MM-dd` calendar date returns `400`.
 - A malformed JSON body returns `400` rather than a raw parse error.
 
 Returns the saved settings (same shape as `GET`).
